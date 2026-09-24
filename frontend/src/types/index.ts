@@ -45,3 +45,5 @@ export interface ModalState {
   } | null;
   bookingPreview: boolean;
 }
+
+export * from './booking';

@@ -4,6 +4,7 @@ import Icon from '../components/common/Icon';
 import { MOCK_PROVIDERS } from '../data/mockProviders';
 import { Provider, SelectedServiceItem } from '../types/service';
 import { EventPlanData, formatIndianRupees } from '../types/event';
+import { Booking } from '../types/booking';
 
 export const ProviderDetailsPage: React.FC = () => {
   const { providerId } = useParams<{ providerId: string }>();
@@ -14,6 +15,7 @@ export const ProviderDetailsPage: React.FC = () => {
   const [selectedServices, setSelectedServices] = useState<SelectedServiceItem[]>([]);
   const [eventPlan, setEventPlan] = useState<EventPlanData | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [isContactUnlocked, setIsContactUnlocked] = useState<boolean>(false);
 
   // Load provider & local storage data
   useEffect(() => {
@@ -36,6 +38,27 @@ export const ProviderDetailsPage: React.FC = () => {
       }
     } catch (e) {
       console.warn('Failed to parse eva_ai_event:', e);
+    }
+
+    // Check if an accepted booking exists for this provider in localStorage: eva_ai_bookings
+    try {
+      const bookingsJson = localStorage.getItem('eva_ai_bookings');
+      if (bookingsJson) {
+        const parsed = JSON.parse(bookingsJson);
+        if (Array.isArray(parsed)) {
+          const hasAccepted = parsed.some(
+            (b: Booking) => b.providerId === providerId && b.status === 'ACCEPTED'
+          );
+          setIsContactUnlocked(hasAccepted);
+        } else {
+          setIsContactUnlocked(false);
+        }
+      } else {
+        setIsContactUnlocked(false);
+      }
+    } catch (e) {
+      console.warn('Failed to parse eva_ai_bookings:', e);
+      setIsContactUnlocked(false);
     }
   }, [providerId]);
 
@@ -165,6 +188,14 @@ export const ProviderDetailsPage: React.FC = () => {
           </div>
 
           <div className="flex items-center gap-3">
+            <Link
+              to="/customer/bookings"
+              className="inline-flex items-center gap-1.5 text-xs sm:text-sm font-semibold text-on-surface hover:text-primary px-3 py-1.5 rounded-xl bg-surface-container/70 border border-surface-container-highest/60 transition-colors"
+            >
+              <Icon name="receipt_long" className="text-[16px] text-primary" />
+              <span>My Bookings</span>
+            </Link>
+
             <Link
               to="/customer/dashboard"
               className="inline-flex items-center gap-1.5 text-xs sm:text-sm font-semibold text-on-surface hover:text-primary px-3 py-1.5 rounded-xl bg-surface-container/70 border border-surface-container-highest/60 transition-colors"
@@ -514,40 +545,68 @@ export const ProviderDetailsPage: React.FC = () => {
 
             {/* Right 4 Columns: Demo Contact & Security Guarantee */}
             <div className="lg:col-span-4 space-y-6">
-              {/* Contact Information (Clearly marked Demo Data) */}
+              {/* Contact Information (Controlled by booking acceptance status) */}
               <div className="rounded-3xl bg-surface-container-high/60 backdrop-blur-xl border border-surface-container-highest/60 p-6 space-y-4">
                 <div className="flex items-center justify-between">
                   <h3 className="font-title-md text-base font-semibold text-on-surface flex items-center gap-2">
                     <Icon name="contact_phone" className="text-primary text-[18px]" />
-                    <span>Direct Inquiries</span>
+                    <span>Contact Provider</span>
                   </h3>
-                  <span className="text-[10px] font-bold uppercase tracking-wider text-secondary px-2 py-0.5 rounded-full bg-secondary-container/20 border border-secondary-container/40">
-                    Demo Data
-                  </span>
+                  {isContactUnlocked ? (
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-400 px-2.5 py-0.5 rounded-full bg-emerald-500/15 border border-emerald-500/30">
+                      Booking Accepted
+                    </span>
+                  ) : (
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-on-surface-variant px-2.5 py-0.5 rounded-full bg-surface-container border border-surface-container-highest/60 flex items-center gap-1">
+                      <Icon name="lock" className="text-[12px]" />
+                      <span>Protected</span>
+                    </span>
+                  )}
                 </div>
 
                 <div className="space-y-3 text-xs">
-                  <div className="p-3 rounded-xl bg-surface-container-low border border-surface-container-highest/50 space-y-1">
-                    <span className="text-[10px] uppercase text-on-surface-variant font-medium">
-                      Representative
-                    </span>
-                    <div className="text-on-surface font-semibold">{provider.contactDemo.manager}</div>
-                  </div>
+                  {isContactUnlocked ? (
+                    <>
+                      {/* Unlocked Contact Details */}
+                      <div className="p-3 rounded-xl bg-surface-container-low border border-surface-container-highest/50 space-y-1">
+                        <span className="text-[10px] uppercase text-on-surface-variant font-medium">
+                          Representative
+                        </span>
+                        <div className="text-on-surface font-semibold">{provider.contactDemo.manager}</div>
+                      </div>
 
-                  <div className="p-3 rounded-xl bg-surface-container-low border border-surface-container-highest/50 space-y-1">
-                    <span className="text-[10px] uppercase text-on-surface-variant font-medium">
-                      Phone Number
-                    </span>
-                    <div className="text-primary font-semibold">{provider.contactDemo.phone}</div>
-                  </div>
+                      <div className="p-3.5 rounded-xl bg-surface-container-low border border-primary/40 space-y-1 shadow-[0_0_12px_rgba(242,202,80,0.1)]">
+                        <span className="text-[10px] uppercase text-on-surface-variant font-semibold flex items-center gap-1.5">
+                          <span>📞</span>
+                          <span>Provider Phone Number</span>
+                        </span>
+                        <div className="text-primary font-bold text-sm">{provider.contactDemo.phone}</div>
+                      </div>
 
-                  <div className="p-3 rounded-xl bg-surface-container-low border border-surface-container-highest/50 space-y-1">
-                    <span className="text-[10px] uppercase text-on-surface-variant font-medium">
-                      Official Email
-                    </span>
-                    <div className="text-on-surface font-medium">{provider.contactDemo.email}</div>
-                  </div>
+                      <div className="p-3.5 rounded-xl bg-surface-container-low border border-primary/40 space-y-1 shadow-[0_0_12px_rgba(242,202,80,0.1)]">
+                        <span className="text-[10px] uppercase text-on-surface-variant font-semibold flex items-center gap-1.5">
+                          <span>✉️</span>
+                          <span>Provider Email</span>
+                        </span>
+                        <div className="text-on-surface font-semibold">{provider.contactDemo.email}</div>
+                      </div>
+                    </>
+                  ) : (
+                    /* Locked Contact Notice */
+                    <div className="p-4 rounded-2xl bg-surface-container-low border border-primary/25 space-y-2 text-center">
+                      <div className="w-10 h-10 rounded-xl bg-primary/10 text-primary flex items-center justify-center mx-auto border border-primary/20">
+                        <Icon name="lock" className="text-[20px]" />
+                      </div>
+                      <div className="text-xs sm:text-sm font-semibold text-on-surface">
+                        🔒 Contact details available after booking confirmation.
+                      </div>
+                      <p className="text-[11px] text-on-surface-variant leading-relaxed">
+                        Once the provider accepts your booking request, their contact details will become available here.
+                      </p>
+                    </div>
+                  )}
 
+                  {/* Public Studio Address */}
                   <div className="p-3 rounded-xl bg-surface-container-low border border-surface-container-highest/50 space-y-1">
                     <span className="text-[10px] uppercase text-on-surface-variant font-medium">
                       Studio Address
@@ -555,6 +614,7 @@ export const ProviderDetailsPage: React.FC = () => {
                     <div className="text-on-surface font-medium">{provider.contactDemo.address}</div>
                   </div>
 
+                  {/* Public Consultation Hours */}
                   <div className="p-3 rounded-xl bg-surface-container-low border border-surface-container-highest/50 space-y-1">
                     <span className="text-[10px] uppercase text-on-surface-variant font-medium">
                       Consultation Hours

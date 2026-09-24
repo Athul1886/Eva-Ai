@@ -261,6 +261,15 @@ export const ServiceDiscoveryPage: React.FC = () => {
               <span className="hidden sm:inline">Back to</span>
               <span>Dashboard</span>
             </Link>
+
+            {/* My Bookings Navigation Link */}
+            <Link
+              to="/customer/bookings"
+              className="inline-flex items-center gap-1.5 text-xs sm:text-sm font-semibold text-on-surface-variant hover:text-primary transition-colors py-1.5 px-3 rounded-xl bg-surface-container/60 hover:bg-surface-container border border-surface-container-highest/60"
+            >
+              <Icon name="receipt_long" className="text-[16px] text-primary" />
+              <span>My Bookings</span>
+            </Link>
           </div>
 
           {/* Customer Profile / Avatar Area */}

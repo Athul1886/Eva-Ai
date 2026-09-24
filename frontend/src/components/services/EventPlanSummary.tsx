@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { Link } from 'react-router-dom';
 import Icon from '../common/Icon';
 import { SelectedServiceItem } from '../../types/service';
 import { formatIndianRupees } from '../../types/event';
@@ -63,14 +64,13 @@ export const EventPlanSummary: React.FC<EventPlanSummaryProps> = ({
             </div>
           </div>
 
-          <button
-            type="button"
-            onClick={() => setIsOpen(true)}
+          <Link
+            to="/customer/event-plan"
             className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-xl bg-primary hover:bg-tertiary text-on-primary text-xs sm:text-sm font-bold transition-all shadow-[0_0_15px_rgba(242,202,80,0.25)] flex-shrink-0"
           >
             <span>View Event Plan</span>
-            <Icon name="arrow_upward" className="text-[14px]" />
-          </button>
+            <Icon name="arrow_forward" className="text-[14px]" />
+          </Link>
         </div>
       </aside>
 
@@ -217,13 +217,23 @@ export const EventPlanSummary: React.FC<EventPlanSummaryProps> = ({
                 </button>
               )}
 
-              <button
-                type="button"
-                onClick={() => setIsOpen(false)}
-                className="ml-auto px-6 py-2.5 rounded-xl bg-primary hover:bg-tertiary text-on-primary font-bold text-xs sm:text-sm transition-all shadow-[0_0_15px_rgba(242,202,80,0.25)]"
-              >
-                Close Plan
-              </button>
+              <div className="flex items-center gap-2 ml-auto">
+                <Link
+                  to="/customer/event-plan"
+                  className="px-4 py-2.5 rounded-xl bg-primary hover:bg-tertiary text-on-primary font-bold text-xs sm:text-sm transition-all shadow-[0_0_15px_rgba(242,202,80,0.25)] flex items-center gap-1.5"
+                >
+                  <span>Open Full Event Plan</span>
+                  <Icon name="open_in_new" className="text-[14px]" />
+                </Link>
+
+                <button
+                  type="button"
+                  onClick={() => setIsOpen(false)}
+                  className="px-4 py-2.5 rounded-xl bg-surface-container hover:bg-surface-bright text-on-surface font-semibold text-xs sm:text-sm transition-colors border border-surface-container-highest/60"
+                >
+                  Close
+                </button>
+              </div>
             </div>
           </div>
         </div>

@@ -11,6 +11,7 @@ export const CustomerDashboardPage: React.FC = () => {
   const [eventPlan, setEventPlan] = useState<EventPlanData | null>(null);
   const [customer, setCustomer] = useState<CustomerProfileData | null>(null);
   const [selectedServicesCount, setSelectedServicesCount] = useState<number>(0);
+  const [bookingsSummary, setBookingsSummary] = useState<{ total: number; pending: number }>({ total: 0, pending: 0 });
   const [isLoading, setIsLoading] = useState<boolean>(true);
 
   useEffect(() => {
@@ -45,6 +46,20 @@ export const CustomerDashboardPage: React.FC = () => {
       }
     } catch (e) {
       console.warn('Failed to parse eva_ai_selected_services from localStorage:', e);
+    }
+
+    // Read saved bookings count
+    try {
+      const bookingsJson = localStorage.getItem('eva_ai_bookings');
+      if (bookingsJson) {
+        const parsed = JSON.parse(bookingsJson);
+        if (Array.isArray(parsed)) {
+          const pending = parsed.filter((b) => b.status === 'PENDING').length;
+          setBookingsSummary({ total: parsed.length, pending });
+        }
+      }
+    } catch (e) {
+      console.warn('Failed to parse eva_ai_bookings from localStorage:', e);
     }
 
     setIsLoading(false);
@@ -114,13 +129,29 @@ export const CustomerDashboardPage: React.FC = () => {
               <p className="text-on-surface-variant text-sm">
                 You haven&apos;t completed the event onboarding wizard yet. Let&apos;s get your event configured!
               </p>
-              <div className="pt-2">
+              <div className="pt-2 flex flex-wrap items-center justify-center gap-3">
                 <Link
                   to="/onboarding/event"
                   className="inline-flex items-center gap-2 px-6 py-3 rounded-xl bg-primary hover:bg-tertiary text-on-primary font-title-md font-bold transition-all shadow-[0_0_20px_rgba(242,202,80,0.25)]"
                 >
                   <span>Start Event Onboarding</span>
                   <Icon name="arrow_forward" className="text-[18px]" />
+                </Link>
+
+                <Link
+                  to="/customer/bookings"
+                  className="inline-flex items-center gap-2 px-5 py-3 rounded-xl bg-surface-container hover:bg-surface-bright text-on-surface font-title-md font-semibold transition-colors border border-surface-container-highest"
+                >
+                  <Icon name="receipt_long" className="text-[18px] text-primary" />
+                  <span>My Bookings</span>
+                </Link>
+
+                <Link
+                  to="/customer/services"
+                  className="inline-flex items-center gap-2 px-5 py-3 rounded-xl bg-surface-container hover:bg-surface-bright text-on-surface font-title-md font-semibold transition-colors border border-surface-container-highest"
+                >
+                  <Icon name="explore" className="text-[18px]" />
+                  <span>Explore Services</span>
                 </Link>
               </div>
             </div>
@@ -316,7 +347,7 @@ export const CustomerDashboardPage: React.FC = () => {
                   <p className="text-on-surface-variant text-xs sm:text-sm leading-relaxed">
                     Eva-Ai has prepared service recommendations matching your {formatIndianRupees(eventPlan.budget)} budget in {eventPlan.location}. Browse photography, venues, catering, makeup, decor, and entertainment professionals.
                   </p>
-                  <div className="pt-1">
+                  <div className="pt-1 flex flex-wrap items-center gap-3">
                     <Link
                       to="/customer/services"
                       className="inline-flex items-center gap-2 px-6 py-3 rounded-xl bg-primary hover:bg-tertiary text-on-primary font-title-md font-bold transition-all shadow-[0_0_20px_rgba(242,202,80,0.25)] hover:shadow-[0_0_28px_rgba(242,202,80,0.4)]"
@@ -324,6 +355,27 @@ export const CustomerDashboardPage: React.FC = () => {
                       <Icon name="explore" className="text-[20px]" />
                       <span>Explore Services</span>
                       <Icon name="arrow_forward" className="text-[18px]" />
+                    </Link>
+
+                    <Link
+                      to="/customer/event-plan"
+                      className="inline-flex items-center gap-2 px-6 py-3 rounded-xl bg-surface-container hover:bg-surface-bright text-primary font-title-md font-bold transition-all border border-primary/30"
+                    >
+                      <Icon name="event_note" className="text-[20px]" />
+                      <span>View My Event Plan</span>
+                    </Link>
+
+                    <Link
+                      to="/customer/bookings"
+                      className="inline-flex items-center gap-2 px-6 py-3 rounded-xl bg-surface-container hover:bg-surface-bright text-on-surface font-title-md font-bold transition-all border border-surface-container-highest/60 hover:border-primary/40"
+                    >
+                      <Icon name="receipt_long" className="text-[20px] text-primary" />
+                      <span>My Bookings</span>
+                      {bookingsSummary.total > 0 && (
+                        <span className="px-2 py-0.5 rounded-full bg-primary/20 text-primary text-xs font-semibold">
+                          {bookingsSummary.pending > 0 ? `${bookingsSummary.pending} pending` : bookingsSummary.total}
+                        </span>
+                      )}
                     </Link>
                   </div>
                 </div>
@@ -342,19 +394,34 @@ export const CustomerDashboardPage: React.FC = () => {
                     <button
                       type="button"
                       onClick={() => navigate('/onboarding/event')}
-                      className="w-full sm:w-auto px-6 py-3.5 rounded-xl bg-surface-container hover:bg-surface-bright text-on-surface font-title-md font-medium transition-colors border border-surface-container-highest/60 flex items-center justify-center gap-2"
+                      className="w-full sm:w-auto px-5 py-3.5 rounded-xl bg-surface-container hover:bg-surface-bright text-on-surface font-title-md font-medium transition-colors border border-surface-container-highest/60 flex items-center justify-center gap-2"
                     >
                       <Icon name="restart_alt" className="text-[18px]" />
                       <span>Plan Another Event</span>
                     </button>
 
                     <Link
+                      to="/customer/event-plan"
+                      className="w-full sm:w-auto px-5 py-3.5 rounded-xl bg-surface-container hover:bg-surface-bright text-primary font-title-md font-semibold transition-colors border border-primary/40 flex items-center justify-center gap-2"
+                    >
+                      <Icon name="event_note" className="text-[18px]" />
+                      <span>Event Plan</span>
+                    </Link>
+
+                    <Link
+                      to="/customer/bookings"
+                      className="w-full sm:w-auto px-5 py-3.5 rounded-xl bg-surface-container hover:bg-surface-bright text-on-surface font-title-md font-semibold transition-colors border border-surface-container-highest/60 hover:border-primary/40 flex items-center justify-center gap-2"
+                    >
+                      <Icon name="receipt_long" className="text-[18px] text-primary" />
+                      <span>My Bookings</span>
+                    </Link>
+
+                    <Link
                       to="/customer/services"
-                      className="w-full sm:w-auto px-8 py-3.5 rounded-xl bg-primary hover:bg-tertiary text-on-primary font-title-md font-bold transition-all shadow-[0_0_20px_rgba(242,202,80,0.25)] hover:shadow-[0_0_28px_rgba(242,202,80,0.4)] flex items-center justify-center gap-2"
+                      className="w-full sm:w-auto px-6 py-3.5 rounded-xl bg-primary hover:bg-tertiary text-on-primary font-title-md font-bold transition-all shadow-[0_0_20px_rgba(242,202,80,0.25)] hover:shadow-[0_0_28px_rgba(242,202,80,0.4)] flex items-center justify-center gap-2"
                     >
                       <Icon name="explore" className="text-[18px]" />
-                      <span>Explore Services</span>
-                      <Icon name="arrow_forward" className="text-[18px]" />
+                      <span>Explore</span>
                     </Link>
                   </div>
                 </div>
