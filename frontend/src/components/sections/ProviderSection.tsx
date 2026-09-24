@@ -52,13 +52,20 @@ export const ProviderSection: React.FC = () => {
                 </div>
               </div>
 
-              <div className="pt-2">
+              <div className="pt-2 flex items-center gap-4 flex-wrap">
                 <Link
                   className="px-8 py-4 rounded-xl bg-primary hover:bg-tertiary text-on-primary font-title-md text-title-md font-semibold transition-all shadow-lg hover:scale-[1.02] inline-flex items-center gap-2"
                   to="/signup/provider"
                 >
                   <Icon name="handshake" className="text-[20px]" />
                   <span>Join as Provider</span>
+                </Link>
+                <Link
+                  className="px-6 py-4 rounded-xl bg-surface-container-high hover:bg-surface-bright text-on-surface text-sm font-semibold transition-colors border border-surface-container-highest inline-flex items-center gap-2"
+                  to="/login/provider"
+                >
+                  <Icon name="badge" className="text-[18px] text-secondary" />
+                  <span>Provider Sign In</span>
                 </Link>
               </div>
             </div>

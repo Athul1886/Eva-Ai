@@ -7,23 +7,27 @@ import ProviderFilters from '../components/services/ProviderFilters';
 import ProviderCard from '../components/services/ProviderCard';
 import EventPlanSummary from '../components/services/EventPlanSummary';
 import EvaAiAssistant from '../components/services/EvaAiAssistant';
-import { MOCK_PROVIDERS, PRICE_RANGES, SERVICE_CATEGORIES } from '../data/mockProviders';
+import { PRICE_RANGES, SERVICE_CATEGORIES } from '../data/mockProviders';
 import { EventPlanData } from '../types/event';
 import { CustomerProfileData } from './CustomerSignupPage';
 import { Provider, SelectedServiceItem, ServiceFilterState } from '../types/service';
+import { isProviderAvailable, getAllDisplayProviders } from '../utils/providerAuth';
 
 export const ServiceDiscoveryPage: React.FC = () => {
-  // 1. Stored event & customer state from localStorage
+  // 1. Providers state (merging mock and live registered providers)
+  const [allProviders, setAllProviders] = useState<Provider[]>(() => getAllDisplayProviders());
+
+  // 2. Stored event & customer state from localStorage
   const [eventPlan, setEventPlan] = useState<EventPlanData | null>(null);
   const [customer, setCustomer] = useState<CustomerProfileData | null>(null);
 
-  // 2. Selected services state from localStorage key: eva_ai_selected_services
+  // 3. Selected services state from localStorage key: eva_ai_selected_services
   const [selectedServices, setSelectedServices] = useState<SelectedServiceItem[]>([]);
 
-  // 3. Toast feedback state
+  // 4. Toast feedback state
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
-  // 4. Filtering and sorting state
+  // 5. Filtering and sorting state
   const [filters, setFilters] = useState<ServiceFilterState>({
     searchQuery: '',
     category: 'all',
@@ -61,6 +65,22 @@ export const ServiceDiscoveryPage: React.FC = () => {
     } catch (e) {
       console.warn('Failed to parse eva_ai_selected_services from localStorage:', e);
     }
+
+    // Listen for live availability changes from Provider portal or storage
+    // Listen for live availability changes, provider profile changes, or storage
+    const handleUpdate = () => {
+      setSelectedServices((prev) => [...prev]);
+      setAllProviders(getAllDisplayProviders());
+    };
+
+    window.addEventListener('eva_ai_availability_updated', handleUpdate);
+    window.addEventListener('eva_ai_provider_profile_updated', handleUpdate);
+    window.addEventListener('storage', handleUpdate);
+    return () => {
+      window.removeEventListener('eva_ai_availability_updated', handleUpdate);
+      window.removeEventListener('eva_ai_provider_profile_updated', handleUpdate);
+      window.removeEventListener('storage', handleUpdate);
+    };
   }, []);
 
   // Save selected services back to localStorage whenever changed
@@ -83,6 +103,12 @@ export const ServiceDiscoveryPage: React.FC = () => {
 
   // Handle adding service to event plan
   const handleAddToEvent = (provider: Provider) => {
+    // Availability check against customer's event date
+    if (!isProviderAvailable(provider.id, eventPlan?.eventDate)) {
+      showToast(`This provider is unavailable on your event date.`);
+      return;
+    }
+
     const isAlreadyAdded = selectedServices.some((s) => s.providerId === provider.id);
     if (isAlreadyAdded) {
       showToast(`${provider.name} is already in your event plan.`);
@@ -137,21 +163,21 @@ export const ServiceDiscoveryPage: React.FC = () => {
   // Calculate provider counts for each category
   const categoryCounts = useMemo(() => {
     const counts: Record<string, number> = {
-      all: MOCK_PROVIDERS.length,
+      all: allProviders.length,
     };
     SERVICE_CATEGORIES.forEach((cat) => {
       if (cat.filterKey !== 'all') {
-        counts[cat.filterKey] = MOCK_PROVIDERS.filter(
+        counts[cat.filterKey] = allProviders.filter(
           (p) => p.category.toLowerCase() === cat.filterKey.toLowerCase()
         ).length;
       }
     });
     return counts;
-  }, []);
+  }, [allProviders]);
 
   // Filter and sort providers
   const filteredProviders = useMemo(() => {
-    return MOCK_PROVIDERS.filter((provider) => {
+    return allProviders.filter((provider) => {
       // 1. Search Query Filter
       if (filters.searchQuery.trim()) {
         const query = filters.searchQuery.toLowerCase();
@@ -232,67 +258,6 @@ export const ServiceDiscoveryPage: React.FC = () => {
           <span>{toastMessage}</span>
         </div>
       )}
-
-      {/* A. Header / Navigation */}
-      <header className="fixed top-0 left-0 right-0 z-50 bg-surface/80 backdrop-blur-2xl transition-all border-b border-surface-container/60 shadow-lg">
-        <div className="h-20 max-w-[1440px] mx-auto px-margin-mobile md:px-margin flex items-center justify-between">
-          <div className="flex items-center gap-6 md:gap-10">
-            {/* Brand Logo */}
-            <Link className="flex items-center gap-space-sm group" to="/">
-              <div className="w-9 h-9 rounded-lg bg-surface-container-high flex items-center justify-center shadow-[inset_0_1px_1px_rgba(242,202,80,0.3)] transition-transform group-hover:scale-105">
-                <Icon name="auto_awesome" className="text-primary text-[20px]" />
-              </div>
-              <div className="flex flex-col">
-                <span className="font-headline-sm text-headline-sm font-semibold tracking-wider text-primary uppercase">
-                  EVA-AI
-                </span>
-                <span className="font-label-sm text-label-sm uppercase text-on-surface-variant -mt-1 tracking-widest">
-                  Marketplace
-                </span>
-              </div>
-            </Link>
-
-            {/* Back to Dashboard Navigation Link */}
-            <Link
-              to="/customer/dashboard"
-              className="inline-flex items-center gap-2 text-xs sm:text-sm font-semibold text-on-surface-variant hover:text-primary transition-colors py-1.5 px-3 rounded-xl bg-surface-container/60 hover:bg-surface-container border border-surface-container-highest/60"
-            >
-              <Icon name="arrow_back" className="text-[16px]" />
-              <span className="hidden sm:inline">Back to</span>
-              <span>Dashboard</span>
-            </Link>
-
-            {/* My Bookings Navigation Link */}
-            <Link
-              to="/customer/bookings"
-              className="inline-flex items-center gap-1.5 text-xs sm:text-sm font-semibold text-on-surface-variant hover:text-primary transition-colors py-1.5 px-3 rounded-xl bg-surface-container/60 hover:bg-surface-container border border-surface-container-highest/60"
-            >
-              <Icon name="receipt_long" className="text-[16px] text-primary" />
-              <span>My Bookings</span>
-            </Link>
-          </div>
-
-          {/* Customer Profile / Avatar Area */}
-          <div className="flex items-center gap-3">
-            <Link
-              to="/customer/dashboard"
-              className="flex items-center gap-3 pl-3 py-1 pr-1.5 rounded-full bg-surface-container/70 border border-surface-container-highest/60 hover:border-primary/40 transition-colors group"
-            >
-              <div className="hidden sm:flex flex-col text-right">
-                <span className="text-xs font-bold text-on-surface group-hover:text-primary transition-colors">
-                  {customer?.fullName || 'Event Host'}
-                </span>
-                <span className="text-[10px] text-on-surface-variant uppercase tracking-wider">
-                  Verified Host
-                </span>
-              </div>
-              <div className="w-9 h-9 rounded-full bg-primary/20 text-primary font-bold text-sm flex items-center justify-center border border-primary/30 group-hover:shadow-[0_0_12px_rgba(242,202,80,0.3)] transition-shadow">
-                {customer?.fullName ? customer.fullName.charAt(0).toUpperCase() : 'H'}
-              </div>
-            </Link>
-          </div>
-        </div>
-      </header>
 
       {/* Main Content Area */}
       <main className="flex-1 pt-28 pb-32 relative overflow-hidden">
@@ -392,6 +357,8 @@ export const ServiceDiscoveryPage: React.FC = () => {
                     key={provider.id}
                     provider={provider}
                     isAdded={selectedIdsSet.has(provider.id)}
+                    isAvailable={isProviderAvailable(provider.id, eventPlan?.eventDate)}
+                    eventDate={eventPlan?.eventDate}
                     onAddToEvent={handleAddToEvent}
                   />
                 ))}

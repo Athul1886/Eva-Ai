@@ -7,6 +7,7 @@ import BookingFilters from '../components/bookings/BookingFilters';
 import { Booking } from '../types/booking';
 import { EventPlanData, formatIndianRupees } from '../types/event';
 import { CustomerProfileData } from './CustomerSignupPage';
+import { getCustomerSession } from '../utils/customerAuth';
 
 export const MyBookingsPage: React.FC = () => {
   const [bookings, setBookings] = useState<Booking[]>([]);
@@ -15,20 +16,42 @@ export const MyBookingsPage: React.FC = () => {
   const [activeFilter, setActiveFilter] = useState<FilterStatus>('ALL');
   const [isLoading, setIsLoading] = useState<boolean>(true);
 
-  // Load bookings and event data from localStorage
-  useEffect(() => {
-    // 1. Read bookings
+  const loadBookings = () => {
     try {
       const bookingsJson = localStorage.getItem('eva_ai_bookings');
       if (bookingsJson) {
-        const parsed = JSON.parse(bookingsJson);
+        const parsed: Booking[] = JSON.parse(bookingsJson);
         if (Array.isArray(parsed)) {
-          setBookings(parsed);
+          const session = getCustomerSession();
+          if (session?.customerId) {
+            // Customer session isolation: Only show bookings belonging to this customer
+            const userBookings = parsed.filter((b) => {
+              if (b.customerId) return b.customerId === session.customerId;
+              if (b.customerEmail && session.email) {
+                return b.customerEmail.toLowerCase() === session.email.toLowerCase();
+              }
+              return false;
+            });
+            setBookings(userBookings);
+          } else {
+            setBookings(parsed);
+          }
+        } else {
+          setBookings([]);
         }
+      } else {
+        setBookings([]);
       }
     } catch (e) {
       console.warn('Failed to parse eva_ai_bookings from localStorage:', e);
+      setBookings([]);
     }
+  };
+
+  // Load bookings and event data from localStorage
+  useEffect(() => {
+    // 1. Read bookings
+    loadBookings();
 
     // 2. Read event information
     try {
@@ -51,6 +74,17 @@ export const MyBookingsPage: React.FC = () => {
     }
 
     setIsLoading(false);
+
+    // 4. Live synchronization listeners for status changes across tabs/windows
+    window.addEventListener('eva_ai_bookings_updated', loadBookings);
+    window.addEventListener('storage', loadBookings);
+    window.addEventListener('eva_ai_customer_session_updated', loadBookings);
+
+    return () => {
+      window.removeEventListener('eva_ai_bookings_updated', loadBookings);
+      window.removeEventListener('storage', loadBookings);
+      window.removeEventListener('eva_ai_customer_session_updated', loadBookings);
+    };
   }, []);
 
   // Compute status counts dynamically
@@ -167,63 +201,6 @@ export const MyBookingsPage: React.FC = () => {
   return (
     <div className="bg-surface font-body-md text-on-surface antialiased min-h-screen flex flex-col selection:bg-primary-container selection:text-on-primary">
       {/* Top Customer Portal Navigation Header */}
-      <header className="fixed top-0 left-0 right-0 z-40 bg-surface/85 backdrop-blur-2xl border-b border-surface-container/60 shadow-[0_4px_30px_rgba(0,0,0,0.5)]">
-        <div className="h-20 max-w-[1440px] mx-auto px-margin-mobile md:px-margin flex items-center justify-between">
-          <div className="flex items-center gap-6 sm:gap-10">
-            {/* Brand Logo */}
-            <Link className="flex items-center gap-space-sm group" to="/">
-              <div className="w-9 h-9 rounded-lg bg-surface-container-high flex items-center justify-center shadow-[inset_0_1px_1px_rgba(242,202,80,0.3)] transition-transform group-hover:scale-105">
-                <Icon name="auto_awesome" className="text-primary text-[20px]" />
-              </div>
-              <div className="flex flex-col">
-                <span className="font-headline-sm text-headline-sm font-semibold tracking-wider text-primary uppercase">
-                  EVA-AI
-                </span>
-                <span className="font-label-sm text-label-sm uppercase text-on-surface-variant -mt-1 tracking-widest">
-                  Orders & Bookings
-                </span>
-              </div>
-            </Link>
-
-            {/* Breadcrumb Navigation */}
-            <div className="hidden sm:flex items-center gap-2 text-xs text-on-surface-variant">
-              <Link to="/customer/dashboard" className="hover:text-primary transition-colors">
-                Dashboard
-              </Link>
-              <span>/</span>
-              <Link to="/customer/event-plan" className="hover:text-primary transition-colors">
-                Event Plan
-              </Link>
-              <span>/</span>
-              <span className="text-primary font-semibold">My Bookings</span>
-            </div>
-          </div>
-
-          {/* Quick Header Actions */}
-          <div className="flex items-center gap-3">
-            <Link
-              to="/customer/services"
-              className="hidden sm:inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-surface-container/80 hover:bg-surface-container text-on-surface-variant hover:text-primary text-xs font-semibold border border-surface-container-highest/60 transition-colors"
-            >
-              <Icon name="explore" className="text-[16px]" />
-              <span>Explore Services</span>
-            </Link>
-
-            <Link
-              to="/customer/dashboard"
-              className="flex items-center gap-2.5 pl-3 py-1 pr-1.5 rounded-full bg-surface-container/70 border border-surface-container-highest/60 hover:border-primary/40 transition-colors group"
-            >
-              <span className="hidden md:inline text-xs font-semibold text-on-surface group-hover:text-primary transition-colors">
-                {customer?.fullName || 'Event Host'}
-              </span>
-              <div className="w-8 h-8 rounded-full bg-primary/20 text-primary font-bold text-xs flex items-center justify-center border border-primary/30">
-                {customer?.fullName ? customer.fullName.charAt(0).toUpperCase() : 'H'}
-              </div>
-            </Link>
-          </div>
-        </div>
-      </header>
-
       {/* Main Content */}
       <main className="flex-1 pt-28 pb-28 relative overflow-hidden">
         {/* Ambient atmospheric glows */}

@@ -32,7 +32,7 @@ export const HeroSection: React.FC = () => {
 
             <h1 className="font-display-hero text-display-hero-mobile md:text-display-hero font-normal text-on-surface leading-tight tracking-tight">
               Plan Your Perfect Event <br />
-              <span className="font-headline-lg italic font-medium text-transparent bg-clip-text bg-gradient-to-r from-[#FDE89C] via-primary to-tertiary">
+              <span className="font-headline-lg italic font-medium text-transparent bg-clip-text bg-gradient-to-r dark:from-[#FDE89C] from-primary dark:via-primary via-tertiary dark:to-tertiary to-primary">
                 with AI.
               </span>
             </h1>
@@ -44,7 +44,7 @@ export const HeroSection: React.FC = () => {
             <div className="flex flex-wrap items-center gap-4 pt-2">
               <Link
                 className="group relative inline-flex items-center gap-3 px-8 py-4 rounded-xl bg-gradient-to-r from-primary via-tertiary to-primary-fixed text-on-primary font-title-md text-title-md font-semibold transition-all duration-300 shadow-[0_0_30px_rgba(242,202,80,0.35)] hover:shadow-[0_0_45px_rgba(242,202,80,0.55)] hover:scale-[1.02]"
-                to="/signup"
+                to="/signup/customer"
               >
                 <Icon name="magic_button" className="text-[20px] text-on-primary" />
                 <span>Plan My Event</span>

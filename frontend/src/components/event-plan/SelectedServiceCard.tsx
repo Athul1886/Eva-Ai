@@ -9,6 +9,8 @@ interface SelectedServiceCardProps {
   service: SelectedServiceItem;
   hasActiveBooking?: boolean;
   activeBookingStatus?: string;
+  isUnavailable?: boolean;
+  eventDate?: string;
   onRemove: (providerId: string) => void;
 }
 
@@ -16,6 +18,8 @@ export const SelectedServiceCard: React.FC<SelectedServiceCardProps> = ({
   service,
   hasActiveBooking = false,
   activeBookingStatus,
+  isUnavailable = false,
+  eventDate,
   onRemove,
 }) => {
   // Enrich from mock provider data if available
@@ -31,7 +35,13 @@ export const SelectedServiceCard: React.FC<SelectedServiceCardProps> = ({
   const displayReviewCount = provider?.reviewCount;
 
   return (
-    <div className="rounded-3xl bg-surface-container-high/60 backdrop-blur-xl border border-surface-container-highest/60 hover:border-primary/40 transition-all duration-300 p-5 sm:p-6 shadow-xl flex flex-col sm:flex-row gap-5 items-start sm:items-center justify-between group">
+    <div
+      className={`rounded-3xl bg-surface-container-high/60 backdrop-blur-xl border transition-all duration-300 p-5 sm:p-6 shadow-xl flex flex-col sm:flex-row gap-5 items-start sm:items-center justify-between group ${
+        isUnavailable
+          ? 'border-error/45 bg-error/[0.03] shadow-[0_0_20px_rgba(255,180,171,0.06)]'
+          : 'border-surface-container-highest/60 hover:border-primary/40'
+      }`}
+    >
       {/* Left: Image & Details */}
       <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4 sm:gap-5 flex-1 w-full">
         {/* Thumbnail Image */}
@@ -43,6 +53,12 @@ export const SelectedServiceCard: React.FC<SelectedServiceCardProps> = ({
             loading="lazy"
           />
           <div className="absolute inset-0 bg-gradient-to-t from-surface-container-high/80 via-transparent to-transparent sm:hidden" />
+          {isUnavailable && (
+            <div className="absolute top-2 left-2 px-2 py-0.5 rounded-lg bg-error/90 text-on-error font-bold text-[10px] uppercase tracking-wider backdrop-blur-sm shadow-md flex items-center gap-1">
+              <Icon name="event_busy" className="text-[12px]" />
+              <span>Unavailable</span>
+            </div>
+          )}
         </div>
 
         {/* Info Column */}
@@ -57,11 +73,18 @@ export const SelectedServiceCard: React.FC<SelectedServiceCardProps> = ({
               <span>{displayLocation}</span>
             </span>
 
-            {hasActiveBooking && (
-              <span className="inline-flex items-center gap-1 text-[11px] font-semibold px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-300 border border-amber-500/30">
-                <Icon name="schedule" className="text-[12px]" />
-                <span>Request {activeBookingStatus === 'ACCEPTED' ? 'Accepted' : 'Pending'}</span>
+            {isUnavailable ? (
+              <span className="inline-flex items-center gap-1 text-[11px] font-semibold px-2.5 py-0.5 rounded-full bg-error/15 text-error border border-error/30">
+                <Icon name="event_busy" className="text-[12px]" />
+                <span>Unavailable on {eventDate || 'Event Date'}</span>
               </span>
+            ) : (
+              hasActiveBooking && (
+                <span className="inline-flex items-center gap-1 text-[11px] font-semibold px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-300 border border-amber-500/30">
+                  <Icon name="schedule" className="text-[12px]" />
+                  <span>Request {activeBookingStatus === 'ACCEPTED' ? 'Accepted' : 'Pending'}</span>
+                </span>
+              )
             )}
           </div>
 
@@ -86,6 +109,15 @@ export const SelectedServiceCard: React.FC<SelectedServiceCardProps> = ({
           <p className="text-xs text-on-surface-variant line-clamp-2 leading-relaxed max-w-xl">
             {displayDescription}
           </p>
+
+          {isUnavailable && (
+            <div className="p-2.5 rounded-xl bg-error-container/30 border border-error/30 flex items-center gap-2 text-xs text-error mt-1.5">
+              <Icon name="warning" className="text-[16px] text-error flex-shrink-0" />
+              <span>
+                This provider is unavailable on your event date ({eventDate}). They will be excluded if booking requests are sent.
+              </span>
+            </div>
+          )}
 
           <div className="pt-1 flex items-baseline gap-1.5">
             <span className="text-[11px] text-on-surface-variant uppercase tracking-wider">

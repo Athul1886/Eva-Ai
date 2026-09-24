@@ -22,7 +22,7 @@ export const AiFeatureSection: React.FC = () => {
 
               <h2 className="font-display-hero text-display-hero-mobile md:text-headline-lg font-normal text-on-surface leading-tight">
                 Your event.{' '}
-                <span className="italic text-transparent bg-clip-text bg-gradient-to-r from-[#FDE89C] via-primary to-tertiary">
+                <span className="italic text-transparent bg-clip-text bg-gradient-to-r dark:from-[#FDE89C] from-primary dark:via-primary via-tertiary dark:to-tertiary to-primary">
                   Your budget.
                 </span>{' '}
                 Your choices.

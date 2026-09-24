@@ -3,13 +3,137 @@
 @tailwind utilities;
 
 @layer base {
+  :root,
+  :root[data-theme="dark"],
+  [data-theme="dark"],
+  html.dark,
+  .dark {
+    color-scheme: dark;
+    --color-surface: 18 19 23; /* #121317 */
+    --color-surface-dim: 18 19 23;
+    --color-surface-container: 31 31 36; /* #1f1f24 */
+    --color-surface-container-high: 41 42 46; /* #292a2e */
+    --color-surface-container-highest: 52 52 57; /* #343439 */
+    --color-surface-container-low: 26 27 32; /* #1a1b20 */
+    --color-surface-container-lowest: 13 14 18; /* #0d0e12 */
+    --color-surface-bright: 56 57 62; /* #38393e */
+    --color-surface-variant: 52 52 57; /* #343439 */
+    --color-surface-tint: 233 195 73; /* #e9c349 */
+
+    --color-on-surface: 227 226 232; /* #e3e2e8 */
+    --color-on-surface-variant: 208 197 175; /* #d0c5af */
+
+    --color-primary: 242 202 80; /* #f2ca50 */
+    --color-on-primary: 60 47 0; /* #3c2f00 */
+    --color-primary-container: 212 175 55; /* #d4af37 */
+    --color-on-primary-container: 85 67 0; /* #554300 */
+    --color-primary-fixed: 255 224 136;
+    --color-primary-fixed-dim: 233 195 73;
+    --color-on-primary-fixed: 36 26 0;
+    --color-on-primary-fixed-variant: 87 69 0;
+    --color-inverse-primary: 115 92 0;
+
+    --color-secondary: 255 178 190; /* #ffb2be */
+    --color-on-secondary: 91 23 41; /* #5b1729 */
+    --color-secondary-container: 123 47 64; /* #7b2f40 */
+    --color-on-secondary-container: 255 156 173; /* #ff9cad */
+    --color-secondary-fixed: 255 217 222;
+    --color-secondary-fixed-dim: 255 178 190;
+    --color-on-secondary-fixed: 63 1 20;
+    --color-on-secondary-fixed-variant: 120 45 62;
+
+    --color-tertiary: 238 203 108; /* #eecb6c */
+    --color-on-tertiary: 61 47 0;
+    --color-tertiary-container: 208 176 84;
+    --color-on-tertiary-container: 86 67 0;
+    --color-tertiary-fixed: 255 224 141;
+    --color-tertiary-fixed-dim: 229 195 101;
+    --color-on-tertiary-fixed: 36 26 0;
+    --color-on-tertiary-fixed-variant: 88 68 0;
+
+    --color-outline: 153 144 124; /* #99907c */
+    --color-outline-variant: 77 70 53; /* #4d4635 */
+    --color-inverse-surface: 227 226 232;
+    --color-inverse-on-surface: 47 48 53;
+
+    --color-error: 255 180 171; /* #ffb4ab */
+    --color-on-error: 105 0 5;
+    --color-error-container: 147 0 10;
+    --color-on-error-container: 255 218 214;
+  }
+
+  :root[data-theme="light"],
+  [data-theme="light"],
+  html.light,
+  .light {
+    color-scheme: light;
+    /* Luxury Light / Editorial Cream & Warm Ivory */
+    --color-surface: 249 248 245; /* #F9F8F5 - Warm pearlescent editorial ivory */
+    --color-surface-dim: 238 234 225; /* #EEEAE1 */
+    --color-surface-container: 242 238 230; /* #F2EEE6 - Soft neutral container */
+    --color-surface-container-high: 235 230 220; /* #EBE6DC - Elevated container */
+    --color-surface-container-highest: 216 209 194; /* #D8D1C2 - Elegant divider/border */
+    --color-surface-container-low: 247 244 238; /* #F7F4EE - Low container */
+    --color-surface-container-lowest: 255 255 255; /* #FFFFFF - Pure white card */
+    --color-surface-bright: 255 255 255; /* #FFFFFF */
+    --color-surface-variant: 240 236 227;
+    --color-surface-tint: 179 135 15;
+
+    --color-on-surface: 28 27 31; /* #1C1B1F - Rich charcoal black */
+    --color-on-surface-variant: 92 87 78; /* #5C574E - High-contrast editorial secondary */
+
+    /* Champagne Gold in light mode: deep antique brass / warm gold for readability */
+    --color-primary: 179 135 15; /* #B3870F - High contrast 4.8:1 gold */
+    --color-on-primary: 255 255 255; /* #FFFFFF - Crisp white text on primary button */
+    --color-primary-container: 245 228 175; /* #F5E4AF */
+    --color-on-primary-container: 60 45 0;
+    --color-primary-fixed: 245 228 175;
+    --color-primary-fixed-dim: 200 155 30;
+    --color-on-primary-fixed: 36 26 0;
+    --color-on-primary-fixed-variant: 87 69 0;
+    --color-inverse-primary: 242 202 80;
+
+    /* Burgundy / Rose Accent */
+    --color-secondary: 155 44 71; /* #9B2C47 - Deep rose wine */
+    --color-on-secondary: 255 255 255;
+    --color-secondary-container: 253 234 238; /* #FDEAEF - Delicate blush background */
+    --color-on-secondary-container: 115 26 48;
+    --color-secondary-fixed: 253 234 238;
+    --color-secondary-fixed-dim: 244 200 210;
+    --color-on-secondary-fixed: 63 1 20;
+    --color-on-secondary-fixed-variant: 120 45 62;
+
+    /* Tertiary Accent */
+    --color-tertiary: 160 120 15; /* #A0780F */
+    --color-on-tertiary: 255 255 255;
+    --color-tertiary-container: 248 232 188;
+    --color-on-tertiary-container: 70 50 0;
+    --color-tertiary-fixed: 248 232 188;
+    --color-tertiary-fixed-dim: 229 195 101;
+    --color-on-tertiary-fixed: 36 26 0;
+    --color-on-tertiary-fixed-variant: 88 68 0;
+
+    --color-outline: 138 130 115; /* #8A8273 */
+    --color-outline-variant: 205 197 182; /* #CDC5B6 */
+    --color-inverse-surface: 47 48 53;
+    --color-inverse-on-surface: 249 248 245;
+
+    --color-error: 186 26 26; /* #BA1A1A */
+    --color-on-error: 255 255 255;
+    --color-error-container: 255 218 214;
+    --color-on-error-container: 65 0 2;
+  }
+
   html,
   body {
     margin: 0;
     padding: 0;
+    transition: background-color 0.25s ease, color 0.25s ease;
   }
   body {
     overscroll-behavior: none;
+    background-color: rgb(var(--color-surface));
+    color: rgb(var(--color-on-surface));
   }
   main > :first-child {
     margin-top: 0 !important;

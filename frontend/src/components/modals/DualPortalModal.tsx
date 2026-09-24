@@ -52,7 +52,7 @@ export const DualPortalModal: React.FC<DualPortalModalProps> = ({
             ACCESS THE ATELIER
           </span>
           <h3 className="font-headline-sm text-headline-sm text-on-surface font-semibold mt-1">
-            Welcome to EVENTORA
+            Welcome to Eva-Ai
           </h3>
           <p className="font-body-sm text-body-sm text-on-surface-variant mt-1">
             Select your gateway to proceed

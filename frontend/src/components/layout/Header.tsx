@@ -1,6 +1,7 @@
 import React from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import Icon from '../common/Icon';
+import ThemeToggle from '../common/ThemeToggle';
 
 export const Header: React.FC = () => {
   const location = useLocation();
@@ -57,7 +58,8 @@ export const Header: React.FC = () => {
         </div>
 
         {/* Action Buttons */}
-        <div className="flex items-center gap-space-md">
+        <div className="flex items-center gap-2 sm:gap-space-md">
+          <ThemeToggle />
           <Link
             className="inline-flex items-center justify-center px-space-md py-space-sm rounded-lg font-title-md text-title-md text-on-surface hover:text-primary transition-colors"
             to="/login"
@@ -65,7 +67,7 @@ export const Header: React.FC = () => {
             Sign In
           </Link>
           <Link
-            className="inline-flex items-center justify-center px-space-lg py-space-sm rounded-lg bg-primary hover:bg-tertiary text-on-primary font-title-md text-title-md font-semibold transition-all shadow-[0_0_20px_rgba(242,202,80,0.25)] hover:shadow-[0_0_28px_rgba(242,202,80,0.4)]"
+            className="inline-flex items-center justify-center px-3 sm:px-space-lg py-space-sm rounded-lg bg-primary hover:bg-tertiary text-on-primary font-title-md text-title-md font-semibold transition-all shadow-[0_0_20px_rgba(242,202,80,0.25)] hover:shadow-[0_0_28px_rgba(242,202,80,0.4)]"
             to="/signup"
           >
             Get Started

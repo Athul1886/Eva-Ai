@@ -7,12 +7,16 @@ import { formatIndianRupees } from '../../types/event';
 interface ProviderCardProps {
   provider: Provider;
   isAdded: boolean;
+  isAvailable?: boolean;
+  eventDate?: string;
   onAddToEvent: (provider: Provider) => void;
 }
 
 export const ProviderCard: React.FC<ProviderCardProps> = ({
   provider,
   isAdded,
+  isAvailable = true,
+  eventDate,
   onAddToEvent,
 }) => {
   return (
@@ -29,11 +33,19 @@ export const ProviderCard: React.FC<ProviderCardProps> = ({
         {/* Ambient Dark Gradient Over Image */}
         <div className="absolute inset-0 bg-gradient-to-t from-surface-container-high via-surface-container-high/20 to-transparent" />
 
-        {/* Category Badge & Location */}
+        {/* Category Badge, Unavailable Badge & Location */}
         <div className="absolute top-3 left-3 right-3 flex items-center justify-between pointer-events-none">
-          <span className="px-3 py-1 rounded-full bg-surface-container-lowest/85 backdrop-blur-md text-primary font-bold text-[11px] uppercase tracking-wider border border-primary/20 shadow-md">
-            {provider.category}
-          </span>
+          <div className="flex items-center gap-1.5">
+            <span className="px-3 py-1 rounded-full bg-surface-container-lowest/85 backdrop-blur-md text-primary font-bold text-[11px] uppercase tracking-wider border border-primary/20 shadow-md">
+              {provider.category}
+            </span>
+            {!isAvailable && (
+              <span className="px-2 py-0.5 rounded-full bg-error/90 text-on-error font-bold text-[10px] uppercase tracking-wider shadow-md flex items-center gap-1">
+                <Icon name="event_busy" className="text-[12px]" />
+                <span>Unavailable</span>
+              </span>
+            )}
+          </div>
 
           <div className="flex items-center gap-1 px-2.5 py-1 rounded-full bg-surface-container-lowest/85 backdrop-blur-md text-on-surface text-xs font-semibold border border-surface-container-highest/60 shadow-md">
             <Icon name="location_on" className="text-primary text-[14px]" />
@@ -106,28 +118,40 @@ export const ProviderCard: React.FC<ProviderCardProps> = ({
             <Icon name="arrow_forward" className="text-[14px]" />
           </Link>
 
-          <button
-            type="button"
-            onClick={() => onAddToEvent(provider)}
-            disabled={isAdded}
-            className={`w-full inline-flex items-center justify-center gap-1.5 px-3 py-2.5 rounded-xl text-xs font-bold transition-all ${
-              isAdded
-                ? 'bg-secondary-container/50 text-secondary border border-secondary-container/60 cursor-default shadow-sm'
-                : 'bg-primary hover:bg-tertiary text-on-primary shadow-[0_0_15px_rgba(242,202,80,0.2)] hover:shadow-[0_0_22px_rgba(242,202,80,0.35)] active:scale-[0.98]'
-            }`}
-          >
-            {isAdded ? (
-              <>
-                <Icon name="check" className="text-[15px]" />
-                <span>Added ✓</span>
-              </>
-            ) : (
-              <>
-                <Icon name="add" className="text-[15px]" />
-                <span>Add to Event</span>
-              </>
-            )}
-          </button>
+          {!isAvailable ? (
+            <button
+              type="button"
+              disabled={true}
+              title="This provider is unavailable on your event date."
+              className="w-full inline-flex items-center justify-center gap-1.5 px-3 py-2.5 rounded-xl text-xs font-semibold bg-surface-container text-on-surface-variant/50 border border-surface-container-highest/60 cursor-not-allowed shadow-none"
+            >
+              <Icon name="block" className="text-[14px]" />
+              <span>Unavailable</span>
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={() => onAddToEvent(provider)}
+              disabled={isAdded}
+              className={`w-full inline-flex items-center justify-center gap-1.5 px-3 py-2.5 rounded-xl text-xs font-bold transition-all ${
+                isAdded
+                  ? 'bg-secondary-container/50 text-secondary border border-secondary-container/60 cursor-default shadow-sm'
+                  : 'bg-primary hover:bg-tertiary text-on-primary shadow-[0_0_15px_rgba(242,202,80,0.2)] hover:shadow-[0_0_22px_rgba(242,202,80,0.35)] active:scale-[0.98]'
+              }`}
+            >
+              {isAdded ? (
+                <>
+                  <Icon name="check" className="text-[15px]" />
+                  <span>Added ✓</span>
+                </>
+              ) : (
+                <>
+                  <Icon name="add" className="text-[15px]" />
+                  <span>Add to Event</span>
+                </>
+              )}
+            </button>
+          )}
         </div>
       </div>
     </div>

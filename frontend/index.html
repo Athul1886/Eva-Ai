@@ -4,6 +4,21 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Eva-Ai — AI Event Platform</title>
+    <script>
+      (function() {
+        try {
+          var saved = localStorage.getItem('eva_ai_theme');
+          var theme = saved === 'light' ? 'light' : 'dark';
+          document.documentElement.className = theme;
+          document.documentElement.setAttribute('data-theme', theme);
+          document.documentElement.style.colorScheme = theme;
+        } catch (e) {
+          document.documentElement.className = 'dark';
+          document.documentElement.setAttribute('data-theme', 'dark');
+          document.documentElement.style.colorScheme = 'dark';
+        }
+      })();
+    </script>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link

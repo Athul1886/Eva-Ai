@@ -3,6 +3,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import Header from '../components/layout/Header';
 import Footer from '../components/layout/Footer';
 import Icon from '../components/common/Icon';
+import { setCustomerSession, CustomerSession } from '../utils/customerAuth';
 
 export interface CustomerProfileData {
   fullName: string;
@@ -95,6 +96,15 @@ export const CustomerSignupPage: React.FC = () => {
 
       try {
         localStorage.setItem('eva_ai_customer', JSON.stringify(customerData));
+        const customerSession: CustomerSession = {
+          customerId: `cust_${btoa(customerData.email).substring(0, 10)}`,
+          fullName: customerData.fullName,
+          email: customerData.email,
+          phone: customerData.phone,
+          location: customerData.location,
+          loginAt: new Date().toISOString(),
+        };
+        setCustomerSession(customerSession);
       } catch (storageErr) {
         console.warn('Unable to write to localStorage:', storageErr);
       }
@@ -352,7 +362,7 @@ export const CustomerSignupPage: React.FC = () => {
             <div className="text-center mt-6 pt-4 border-t border-surface-container">
               <p className="font-body-sm text-body-sm text-on-surface-variant">
                 Already have an account?{' '}
-                <Link className="text-primary font-semibold hover:underline transition-colors" to="/login">
+                <Link className="text-primary font-semibold hover:underline transition-colors" to="/login/customer">
                   Sign In
                 </Link>
               </p>

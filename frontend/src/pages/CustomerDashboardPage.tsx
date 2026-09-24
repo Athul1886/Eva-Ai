@@ -90,8 +90,6 @@ export const CustomerDashboardPage: React.FC = () => {
 
   return (
     <div className="bg-surface font-body-md text-on-surface antialiased min-h-screen flex flex-col selection:bg-primary-container selection:text-on-primary">
-      <Header />
-
       <main className="flex-1 pt-28 pb-20 relative overflow-hidden">
         {/* Ambient atmospheric glows */}
         <div className="absolute top-1/4 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[700px] h-[350px] bg-primary/10 rounded-full blur-[140px] pointer-events-none" />
@@ -275,19 +273,25 @@ export const CustomerDashboardPage: React.FC = () => {
                 <div className="space-y-3">
                   <h3 className="font-title-md text-base font-semibold text-on-surface flex items-center gap-2">
                     <Icon name="design_services" className="text-[18px] text-primary" />
-                    <span>Requested Services ({eventPlan.services.length})</span>
+                    <span>Requested Services ({(eventPlan.services || []).length})</span>
                   </h3>
-                  <div className="flex flex-wrap gap-2">
-                    {eventPlan.services.map((srv) => (
-                      <span
-                        key={srv}
-                        className="px-3 py-1.5 rounded-xl bg-surface-container text-on-surface text-xs font-medium border border-surface-container-highest/70 flex items-center gap-1.5"
-                      >
-                        <Icon name="check_circle" className="text-[14px] text-primary" />
-                        {srv}
-                      </span>
-                    ))}
-                  </div>
+                  {eventPlan.services && eventPlan.services.length > 0 ? (
+                    <div className="flex flex-wrap gap-2">
+                      {eventPlan.services.map((srv) => (
+                        <span
+                          key={srv}
+                          className="px-3 py-1.5 rounded-xl bg-surface-container text-on-surface text-xs font-medium border border-surface-container-highest/70 flex items-center gap-1.5"
+                        >
+                          <Icon name="check_circle" className="text-[14px] text-primary" />
+                          {srv}
+                        </span>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="text-xs text-on-surface-variant italic">
+                      No specific services requested yet.
+                    </p>
+                  )}
                 </div>
 
                 {/* Style Preferences */}

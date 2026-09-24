@@ -6,6 +6,7 @@ interface BudgetOverviewProps {
   totalBudget: number | '';
   estimatedCost: number;
   selectedCount: number;
+  unavailableCount?: number;
   onSendBookingRequests: () => void;
   isSending?: boolean;
 }
@@ -14,6 +15,7 @@ export const BudgetOverview: React.FC<BudgetOverviewProps> = ({
   totalBudget,
   estimatedCost,
   selectedCount,
+  unavailableCount = 0,
   onSendBookingRequests,
   isSending = false,
 }) => {
@@ -156,6 +158,18 @@ export const BudgetOverview: React.FC<BudgetOverviewProps> = ({
           Prices shown are starting/estimated prices. Final pricing will be confirmed directly by the service provider.
         </span>
       </div>
+
+      {/* Unavailable warning if any selected provider is unavailable */}
+      {unavailableCount > 0 && (
+        <div className="p-3.5 rounded-2xl bg-error-container/30 border border-error/40 flex items-start gap-2.5 text-xs text-error">
+          <Icon name="event_busy" className="text-[18px] text-error flex-shrink-0 mt-0.5" />
+          <span>
+            {unavailableCount === selectedCount
+              ? 'All selected providers are unavailable on your event date. You cannot send booking requests until you change dates or replace them.'
+              : `${unavailableCount} selected provider(s) are unavailable on your date and will be excluded when sending requests.`}
+          </span>
+        </div>
+      )}
 
       {/* Send Booking Requests Action Button */}
       {selectedCount > 0 && (

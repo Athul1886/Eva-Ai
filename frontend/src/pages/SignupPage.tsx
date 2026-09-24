@@ -43,7 +43,7 @@ export const SignupPage: React.FC = () => {
                   Customer
                 </h2>
                 <p className="font-body-md text-body-md text-on-surface-variant leading-relaxed">
-                  Plan your event, discover services, build your event plan and manage bookings.
+                  Plan your event, discover services and manage bookings.
                 </p>
               </div>
 
@@ -71,16 +71,16 @@ export const SignupPage: React.FC = () => {
                   Service Provider
                 </h2>
                 <p className="font-body-md text-body-md text-on-surface-variant leading-relaxed">
-                  Showcase your services and connect with customers planning their events.
+                  List your services, manage requests and grow your business.
                 </p>
               </div>
 
               <div className="pt-8">
                 <Link
-                  className="w-full py-4 rounded-xl bg-surface-container-high hover:bg-surface-bright text-on-surface hover:text-primary font-title-md text-title-md font-bold transition-all border border-surface-container-highest flex items-center justify-center gap-2"
+                  className="w-full py-4 rounded-xl bg-surface-container-high hover:bg-surface-bright text-on-surface hover:text-secondary font-title-md text-title-md font-bold transition-all border border-surface-container-highest flex items-center justify-center gap-2"
                   to="/signup/provider"
                 >
-                  <span>Continue as Provider</span>
+                  <span>Join as Provider</span>
                   <Icon name="arrow_forward" className="text-[18px]" />
                 </Link>
               </div>

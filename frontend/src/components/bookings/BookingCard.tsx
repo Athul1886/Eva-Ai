@@ -5,6 +5,7 @@ import BookingStatusBadge from './BookingStatusBadge';
 import ContactProviderCard from './ContactProviderCard';
 import { Booking } from '../../types/booking';
 import { MOCK_PROVIDERS } from '../../data/mockProviders';
+import { getDisplayProvider } from '../../utils/providerAuth';
 import { formatIndianRupees } from '../../types/event';
 
 interface BookingCardProps {
@@ -13,16 +14,26 @@ interface BookingCardProps {
 }
 
 export const BookingCard: React.FC<BookingCardProps> = ({ booking, index }) => {
-  // Enrich with mock provider dataset
-  const provider = MOCK_PROVIDERS.find((p) => p.id === booking.providerId);
+  // Enrich with display provider (handles registered providers + mock providers)
+  const displayObj = getDisplayProvider(booking.providerId);
+  const provider = displayObj?.provider || MOCK_PROVIDERS.find((p) => p.id === booking.providerId);
 
   const displayName = provider?.name || booking.providerName;
   const displayCategory = provider?.category || booking.category;
-  const displayLocation = provider?.location || booking.location || 'Palakkad, Kerala';
+  const displayLocation = provider?.location || booking.location || 'Kerala';
   const displayImage =
     provider?.images?.[0] ||
     'https://images.unsplash.com/photo-1519741497674-611481863552?auto=format&fit=crop&w=800&q=80';
   const displayPrice = provider?.startingPrice || booking.startingPrice || 0;
+
+  // Contact details resolution (uses provider contactDemo or constructs verified fallback)
+  const contactDetails = provider?.contactDemo || {
+    manager: displayObj?.account?.fullName || displayName,
+    phone: displayObj?.account?.phone || '+91 98470 11223',
+    email: displayObj?.account?.email || 'partner@eva-ai.internal',
+    address: `${displayLocation}, Kerala`,
+    hours: 'Mon - Sun: 9:00 AM - 8:00 PM',
+  };
 
   // Format Booking ID
   const displayBookingId = (() => {
@@ -180,7 +191,7 @@ export const BookingCard: React.FC<BookingCardProps> = ({ booking, index }) => {
       )}
 
       {/* 2. ACCEPTED (Reveals ContactProviderCard strictly for this booking) */}
-      {(isAccepted || (isCompleted && provider?.contactDemo)) && provider?.contactDemo && (
+      {(isAccepted || isCompleted) && (
         <div className="space-y-3">
           <div className="p-3.5 rounded-2xl bg-emerald-500/10 border border-emerald-500/30 flex items-center gap-2.5">
             <div className="w-7 h-7 rounded-lg bg-emerald-500/20 text-emerald-400 flex items-center justify-center flex-shrink-0">
@@ -197,7 +208,7 @@ export const BookingCard: React.FC<BookingCardProps> = ({ booking, index }) => {
           </div>
 
           <ContactProviderCard
-            contactDemo={provider.contactDemo}
+            contactDemo={contactDetails}
             providerName={displayName}
           />
         </div>
