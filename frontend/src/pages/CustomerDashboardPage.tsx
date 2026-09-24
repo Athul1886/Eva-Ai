@@ -10,6 +10,7 @@ export const CustomerDashboardPage: React.FC = () => {
   const navigate = useNavigate();
   const [eventPlan, setEventPlan] = useState<EventPlanData | null>(null);
   const [customer, setCustomer] = useState<CustomerProfileData | null>(null);
+  const [selectedServicesCount, setSelectedServicesCount] = useState<number>(0);
   const [isLoading, setIsLoading] = useState<boolean>(true);
 
   useEffect(() => {
@@ -31,6 +32,19 @@ export const CustomerDashboardPage: React.FC = () => {
       }
     } catch (e) {
       console.warn('Failed to parse eva_ai_customer from localStorage:', e);
+    }
+
+    // Read saved selected services count
+    try {
+      const selectedJson = localStorage.getItem('eva_ai_selected_services');
+      if (selectedJson) {
+        const parsed = JSON.parse(selectedJson);
+        if (Array.isArray(parsed)) {
+          setSelectedServicesCount(parsed.length);
+        }
+      }
+    } catch (e) {
+      console.warn('Failed to parse eva_ai_selected_services from localStorage:', e);
     }
 
     setIsLoading(false);
@@ -282,15 +296,36 @@ export const CustomerDashboardPage: React.FC = () => {
                   </div>
                 )}
 
-                {/* Next Steps Advisory */}
-                <div className="p-5 rounded-2xl bg-primary/5 border border-primary/20 space-y-2">
-                  <div className="flex items-center gap-2 text-primary font-semibold text-sm">
-                    <Icon name="info" className="text-[18px]" />
-                    <span>Next Milestone</span>
+                {/* Next Steps Advisory & Explore Services Banner */}
+                <div className="p-6 rounded-2xl bg-gradient-to-r from-primary/10 via-surface-container to-surface-container border border-primary/30 space-y-4">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                    <div className="flex items-center gap-2 text-primary font-semibold text-sm">
+                      <Icon name="auto_awesome" className="text-[18px]" />
+                      <span>Next Milestone: Service Discovery</span>
+                    </div>
+                    {selectedServicesCount > 0 ? (
+                      <span className="text-xs uppercase tracking-wider text-primary font-bold px-2.5 py-0.5 rounded-full bg-primary/20 border border-primary/30">
+                        {selectedServicesCount} {selectedServicesCount === 1 ? 'Service' : 'Services'} in Plan
+                      </span>
+                    ) : (
+                      <span className="text-xs uppercase tracking-wider text-primary font-bold">
+                        Recommended Next Step
+                      </span>
+                    )}
                   </div>
                   <p className="text-on-surface-variant text-xs sm:text-sm leading-relaxed">
-                    Eva-Ai will automatically match verified vendors and venue coordinators tailored to your {formatIndianRupees(eventPlan.budget)} budget in {eventPlan.location}.
+                    Eva-Ai has prepared service recommendations matching your {formatIndianRupees(eventPlan.budget)} budget in {eventPlan.location}. Browse photography, venues, catering, makeup, decor, and entertainment professionals.
                   </p>
+                  <div className="pt-1">
+                    <Link
+                      to="/customer/services"
+                      className="inline-flex items-center gap-2 px-6 py-3 rounded-xl bg-primary hover:bg-tertiary text-on-primary font-title-md font-bold transition-all shadow-[0_0_20px_rgba(242,202,80,0.25)] hover:shadow-[0_0_28px_rgba(242,202,80,0.4)]"
+                    >
+                      <Icon name="explore" className="text-[20px]" />
+                      <span>Explore Services</span>
+                      <Icon name="arrow_forward" className="text-[18px]" />
+                    </Link>
+                  </div>
                 </div>
 
                 {/* Action Buttons */}
@@ -303,14 +338,25 @@ export const CustomerDashboardPage: React.FC = () => {
                     <span>Return to Home</span>
                   </Link>
 
-                  <button
-                    type="button"
-                    onClick={() => navigate('/onboarding/event')}
-                    className="w-full sm:w-auto px-8 py-3.5 rounded-xl bg-primary hover:bg-tertiary text-on-primary font-title-md font-bold transition-all shadow-[0_0_20px_rgba(242,202,80,0.25)] hover:shadow-[0_0_28px_rgba(242,202,80,0.4)] flex items-center justify-center gap-2"
-                  >
-                    <Icon name="restart_alt" className="text-[18px]" />
-                    <span>Plan Another Event</span>
-                  </button>
+                  <div className="flex flex-col sm:flex-row items-center gap-3 w-full sm:w-auto">
+                    <button
+                      type="button"
+                      onClick={() => navigate('/onboarding/event')}
+                      className="w-full sm:w-auto px-6 py-3.5 rounded-xl bg-surface-container hover:bg-surface-bright text-on-surface font-title-md font-medium transition-colors border border-surface-container-highest/60 flex items-center justify-center gap-2"
+                    >
+                      <Icon name="restart_alt" className="text-[18px]" />
+                      <span>Plan Another Event</span>
+                    </button>
+
+                    <Link
+                      to="/customer/services"
+                      className="w-full sm:w-auto px-8 py-3.5 rounded-xl bg-primary hover:bg-tertiary text-on-primary font-title-md font-bold transition-all shadow-[0_0_20px_rgba(242,202,80,0.25)] hover:shadow-[0_0_28px_rgba(242,202,80,0.4)] flex items-center justify-center gap-2"
+                    >
+                      <Icon name="explore" className="text-[18px]" />
+                      <span>Explore Services</span>
+                      <Icon name="arrow_forward" className="text-[18px]" />
+                    </Link>
+                  </div>
                 </div>
               </div>
             </div>

@@ -7,6 +7,8 @@ import ProviderSignupPage from './pages/ProviderSignupPage';
 import LoginPage from './pages/LoginPage';
 import EventOnboardingPage from './pages/EventOnboardingPage';
 import CustomerDashboardPage from './pages/CustomerDashboardPage';
+import ServiceDiscoveryPage from './pages/ServiceDiscoveryPage';
+import ProviderDetailsPage from './pages/ProviderDetailsPage';
 
 function ScrollToTop() {
   const { pathname, hash } = useLocation();
@@ -41,6 +43,10 @@ export function App() {
 
         {/* Customer Dashboard Portal */}
         <Route path="/customer/dashboard" element={<CustomerDashboardPage />} />
+
+        {/* Customer Service Discovery Experience */}
+        <Route path="/customer/services" element={<ServiceDiscoveryPage />} />
+        <Route path="/customer/services/:providerId" element={<ProviderDetailsPage />} />
 
         {/* Catch-all fallback */}
         <Route path="*" element={<Navigate to="/" replace />} />
