@@ -3,7 +3,16 @@ import { Link, useNavigate, useLocation } from 'react-router-dom';
 import Header from '../components/layout/Header';
 import Footer from '../components/layout/Footer';
 import Icon from '../components/common/Icon';
-import { authenticateCustomer, getCustomerSession, getCustomerProfile, DEMO_CUSTOMER } from '../utils/customerAuth';
+import {
+  getCustomerSession,
+  setCustomerSession,
+  getCustomerProfile,
+  saveCustomerProfile,
+  CustomerSession,
+  CustomerProfileData,
+  DEMO_CUSTOMER,
+} from '../utils/customerAuth';
+import { authApi, setStoredAccessToken, setStoredRefreshToken, ApiError } from '../api/api';
 
 export const CustomerLoginPage: React.FC = () => {
   const navigate = useNavigate();
@@ -28,11 +37,12 @@ export const CustomerLoginPage: React.FC = () => {
   const [forgotPasswordNotice, setForgotPasswordNotice] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMessage('');
 
-    if (!formData.email.trim()) {
+    const cleanEmail = formData.email.trim().toLowerCase();
+    if (!cleanEmail) {
       setErrorMessage('Please enter your email address.');
       return;
     }
@@ -43,16 +53,118 @@ export const CustomerLoginPage: React.FC = () => {
 
     setIsSubmitting(true);
 
-    setTimeout(() => {
-      const result = authenticateCustomer(formData.email, formData.password);
-      setIsSubmitting(false);
+    try {
+      // 1. Call authApi.login sending ONLY { email, password }
+      const res = await authApi.login({
+        email: cleanEmail,
+        password: formData.password,
+      });
 
-      if (result.success) {
-        navigate(from, { replace: true });
-      } else {
-        setErrorMessage(result.error || 'Invalid credentials. Please try again.');
+      // 2. Extract tokens and user payload from response
+      const accessToken =
+        res?.data?.session?.access_token ||
+        res?.data?.token ||
+        res?.data?.accessToken ||
+        res?.session?.access_token ||
+        res?.token ||
+        res?.accessToken ||
+        null;
+
+      const refreshToken =
+        res?.data?.session?.refresh_token ||
+        res?.data?.refreshToken ||
+        res?.session?.refresh_token ||
+        res?.refreshToken ||
+        null;
+
+      const backendUser =
+        res?.data?.user && typeof res.data.user === 'object'
+          ? res.data.user
+          : res?.user && typeof res.user === 'object'
+          ? res.user
+          : res?.data && typeof res.data === 'object' && ('id' in res.data || 'email' in res.data)
+          ? res.data
+          : null;
+
+      // 3. Customer / Provider Role separation check (Requirement 9)
+      const role = backendUser?.role || res?.data?.role;
+      if (role && role !== 'customer') {
+        setErrorMessage(
+          'This account is registered as a service provider. Please sign in via the Provider Portal.'
+        );
+        setIsSubmitting(false);
+        return;
       }
-    }, 350);
+
+      // Check account active state
+      if (backendUser?.isActive === false) {
+        setErrorMessage('Your account has been deactivated. Please contact support.');
+        setIsSubmitting(false);
+        return;
+      }
+
+      const backendUserId =
+        backendUser?.id || backendUser?._id || backendUser?.userId || null;
+
+      // 4. Centralized token persistence
+      if (accessToken) {
+        setStoredAccessToken(accessToken);
+      }
+      if (refreshToken) {
+        setStoredRefreshToken(refreshToken);
+      }
+
+      // 5. Store customer session and profile with backend user data as source of truth (NEVER store password)
+      const customerProfile: CustomerProfileData = {
+        fullName: backendUser?.fullName || cleanEmail.split('@')[0],
+        email: backendUser?.email || cleanEmail,
+        phone: backendUser?.phone || '',
+        location: backendUser?.location || '',
+        createdAt: backendUser?.createdAt || new Date().toISOString(),
+      };
+      saveCustomerProfile(customerProfile);
+
+      const customerSession: CustomerSession = {
+        customerId: backendUserId || `cust_${btoa(cleanEmail).substring(0, 10)}`,
+        userId: backendUserId || undefined,
+        fullName: customerProfile.fullName,
+        email: customerProfile.email,
+        phone: customerProfile.phone,
+        location: customerProfile.location,
+        loginAt: new Date().toISOString(),
+        token: accessToken || undefined,
+        role: 'customer',
+      };
+      setCustomerSession(customerSession);
+
+      // 6. Redirect to /customer/dashboard or originating route
+      navigate(from, { replace: true });
+    } catch (err: any) {
+      if (err instanceof ApiError) {
+        if (err.status === 401) {
+          setErrorMessage('Invalid email or password. Please check your credentials.');
+        } else if (err.status === 403) {
+          setErrorMessage(
+            err.message || 'Your account has been deactivated. Please contact support.'
+          );
+        } else if (err.status === 400) {
+          const msg =
+            err.message ||
+            (err.missingFields && err.missingFields.length > 0
+              ? `Missing required fields: ${err.missingFields.join(', ')}`
+              : 'Please enter a valid email and password.');
+          setErrorMessage(msg);
+        } else {
+          setErrorMessage('Login failed. Please try again later or check your network connection.');
+        }
+      } else {
+        setErrorMessage(
+          'Unable to connect to the server. Please check your network connection.'
+        );
+      }
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   const handleDemoFill = () => {

@@ -6,12 +6,13 @@ import EventPlanEventSummary from '../components/event-plan/EventPlanEventSummar
 import SelectedServiceCard from '../components/event-plan/SelectedServiceCard';
 import BudgetOverview from '../components/event-plan/BudgetOverview';
 import BookingRequestConfirmation from '../components/event-plan/BookingRequestConfirmation';
-import { EventPlanData } from '../types/event';
+import { EventPlanData, extractEventData } from '../types/event';
 import { SelectedServiceItem } from '../types/service';
-import { Booking } from '../types/booking';
+import { Booking, normalizeBackendBookings, normalizeBackendBooking } from '../types/booking';
 import { CustomerProfileData } from './CustomerSignupPage';
-import { isProviderAvailable } from '../utils/providerAuth';
+import { isProviderAvailable, fetchAndCacheProviderAvailability } from '../utils/providerAuth';
 import { getCustomerSession } from '../utils/customerAuth';
+import { eventsApi, bookingsApi, getStoredAccessToken } from '../api/api';
 
 export const EventPlanPage: React.FC = () => {
   // 1. Data States
@@ -20,6 +21,14 @@ export const EventPlanPage: React.FC = () => {
   const [selectedServices, setSelectedServices] = useState<SelectedServiceItem[]>([]);
   const [existingBookings, setExistingBookings] = useState<Booking[]>([]);
   const [availabilityVersion, setAvailabilityVersion] = useState<number>(0);
+  const [backendPlanMetrics, setBackendPlanMetrics] = useState<{
+    totalBudget?: number;
+    estimatedCost?: number;
+    committedCost?: number;
+    pendingCost?: number;
+    remainingBudget?: number;
+    isOverBudget?: boolean;
+  } | null>(null);
 
   // 2. UI States
   const [isLoading, setIsLoading] = useState<boolean>(true);
@@ -28,59 +37,194 @@ export const EventPlanPage: React.FC = () => {
   const [isSending, setIsSending] = useState<boolean>(false);
   const [confirmedBookings, setConfirmedBookings] = useState<Booking[] | null>(null);
 
-  // Load from localStorage on mount
+  // Load from localStorage & backend on mount
   useEffect(() => {
-    // A. Read event information from localStorage: eva_ai_event
-    try {
-      const eventJson = localStorage.getItem('eva_ai_event');
-      if (eventJson) {
-        setEventPlan(JSON.parse(eventJson));
-      }
-    } catch (e) {
-      console.warn('Failed to parse eva_ai_event from localStorage:', e);
-    }
+    let isMounted = true;
 
-    // B. Read customer info if present
-    try {
-      const customerJson = localStorage.getItem('eva_ai_customer');
-      if (customerJson) {
-        setCustomer(JSON.parse(customerJson));
+    async function loadPlanData() {
+      // A. Read event information from localStorage: eva_ai_event
+      let localEvent: EventPlanData | null = null;
+      try {
+        const eventJson = localStorage.getItem('eva_ai_event');
+        if (eventJson) {
+          localEvent = JSON.parse(eventJson);
+          if (isMounted) {
+            setEventPlan(localEvent);
+          }
+        }
+      } catch (e) {
+        console.warn('Failed to parse eva_ai_event from localStorage:', e);
       }
-    } catch (e) {
-      console.warn('Failed to parse eva_ai_customer from localStorage:', e);
-    }
 
-    // C. Read selected services from localStorage: eva_ai_selected_services
-    try {
-      const selectedJson = localStorage.getItem('eva_ai_selected_services');
-      if (selectedJson) {
-        const parsed = JSON.parse(selectedJson);
-        if (Array.isArray(parsed)) {
-          setSelectedServices(parsed);
+      // B. Read customer info if present
+      try {
+        const customerJson = localStorage.getItem('eva_ai_customer');
+        if (customerJson && isMounted) {
+          setCustomer(JSON.parse(customerJson));
+        }
+      } catch (e) {
+        console.warn('Failed to parse eva_ai_customer from localStorage:', e);
+      }
+
+      // C. Read selected services from localStorage: eva_ai_selected_services
+      try {
+        const selectedJson = localStorage.getItem('eva_ai_selected_services');
+        if (selectedJson && isMounted) {
+          const parsed = JSON.parse(selectedJson);
+          if (Array.isArray(parsed)) {
+            setSelectedServices(parsed);
+            const providerIds = Array.from(new Set(parsed.map((s: any) => s.providerId).filter(Boolean))) as string[];
+            if (providerIds.length > 0) {
+              Promise.allSettled(providerIds.map((id) => fetchAndCacheProviderAvailability(id))).then(() => {
+                if (isMounted) {
+                  setAvailabilityVersion((v) => v + 1);
+                }
+              });
+            }
+          }
+        }
+      } catch (e) {
+        console.warn('Failed to parse eva_ai_selected_services from localStorage:', e);
+      }
+
+      // D. Read existing booking requests from localStorage: eva_ai_bookings
+      try {
+        const bookingsJson = localStorage.getItem('eva_ai_bookings');
+        if (bookingsJson && isMounted) {
+          const parsed = JSON.parse(bookingsJson);
+          if (Array.isArray(parsed)) {
+            setExistingBookings(parsed);
+          }
+        }
+      } catch (e) {
+        console.warn('Failed to parse eva_ai_bookings from localStorage:', e);
+      }
+
+      // E. If authenticated, rehydrate event & plan from backend API
+      const token = getStoredAccessToken();
+      if (token) {
+        try {
+          let backendEvent: EventPlanData | null = null;
+          if (localEvent?.id) {
+            try {
+              const res = await eventsApi.getById(localEvent.id);
+              backendEvent = extractEventData(res);
+            } catch {
+              backendEvent = null;
+            }
+          }
+
+          if (!backendEvent) {
+            const listRes = await eventsApi.getAll();
+            const rawData: any = listRes?.data;
+            const rawList =
+              rawData?.events ||
+              (Array.isArray(rawData) ? rawData : null) ||
+              (listRes as any)?.events ||
+              (Array.isArray(listRes) ? listRes : []);
+            const eventsList = Array.isArray(rawList) ? rawList : [];
+
+            if (eventsList.length > 0) {
+              const latest = eventsList[eventsList.length - 1];
+              backendEvent = extractEventData({ data: latest });
+            }
+          }
+
+          if (backendEvent && isMounted) {
+            setEventPlan(backendEvent);
+            localStorage.setItem('eva_ai_event', JSON.stringify(backendEvent));
+
+            // Fetch backend plan summary (GET /events/:id/plan)
+            if (backendEvent.id) {
+              try {
+                const planRes = await eventsApi.getPlan(backendEvent.id);
+                const planData = planRes?.data?.plan || planRes?.data || planRes;
+                if (planData && typeof planData === 'object') {
+                  setBackendPlanMetrics({
+                    totalBudget: typeof planData.totalBudget === 'number' ? planData.totalBudget : undefined,
+                    estimatedCost: typeof planData.estimatedCost === 'number' ? planData.estimatedCost : undefined,
+                    committedCost: typeof planData.committedCost === 'number' ? planData.committedCost : undefined,
+                    pendingCost: typeof planData.pendingCost === 'number' ? planData.pendingCost : undefined,
+                    remainingBudget: typeof planData.remainingBudget === 'number' ? planData.remainingBudget : undefined,
+                    isOverBudget: typeof planData.isOverBudget === 'boolean' ? planData.isOverBudget : undefined,
+                  });
+
+                  // If backend returns shortlisted services (including empty array []), BACKEND WINS
+                  const rawBackendServices =
+                    planData.services !== undefined
+                      ? planData.services
+                      : planData.shortlistedServices !== undefined
+                      ? planData.shortlistedServices
+                      : planData.selectedServices !== undefined
+                      ? planData.selectedServices
+                      : planData.items;
+
+                  if (Array.isArray(rawBackendServices)) {
+                    const normalized: SelectedServiceItem[] = rawBackendServices.map((s: any) => ({
+                      cartItemId: s.cartItemId || s.id || s.serviceId,
+                      serviceId: s.serviceId || s.id,
+                      providerId: s.providerId || s.id,
+                      providerName: s.providerName || s.name || '',
+                      category: s.category || '',
+                      location: s.location || '',
+                      startingPrice: Number(s.startingPrice || s.price || 0),
+                      selectedAt: s.selectedAt || s.createdAt || new Date().toISOString(),
+                      imageUrl: s.imageUrl || s.images?.[0],
+                      notes: s.notes,
+                      packageDetails: s.packageDetails || s.package,
+                    }));
+                    setSelectedServices(normalized);
+                    localStorage.setItem('eva_ai_selected_services', JSON.stringify(normalized));
+                  }
+                }
+              } catch (planErr) {
+                console.warn('Backend getPlan warning:', planErr);
+              }
+            }
+          }
+
+          // Fetch authoritative bookings (GET /bookings/my)
+          try {
+            const bookingsRes: any = await bookingsApi.getMyBookings();
+            const rawBookings =
+              bookingsRes?.data?.bookings ||
+              bookingsRes?.data ||
+              bookingsRes?.bookings ||
+              bookingsRes;
+            if (Array.isArray(rawBookings) || Array.isArray(bookingsRes?.data)) {
+              const backendBookings = normalizeBackendBookings(rawBookings);
+              if (isMounted) {
+                setExistingBookings(backendBookings);
+                localStorage.setItem('eva_ai_bookings', JSON.stringify(backendBookings));
+              }
+            }
+          } catch (bErr) {
+            console.warn('Backend getMyBookings in plan page warning:', bErr);
+          }
+        } catch (apiErr) {
+          console.warn('Failed to rehydrate event from backend on plan page:', apiErr);
         }
       }
-    } catch (e) {
-      console.warn('Failed to parse eva_ai_selected_services from localStorage:', e);
-    }
 
-    // D. Read existing booking requests from localStorage: eva_ai_bookings
-    try {
-      const bookingsJson = localStorage.getItem('eva_ai_bookings');
-      if (bookingsJson) {
-        const parsed = JSON.parse(bookingsJson);
-        if (Array.isArray(parsed)) {
-          setExistingBookings(parsed);
-        }
+      if (isMounted) {
+        setIsLoading(false);
       }
-    } catch (e) {
-      console.warn('Failed to parse eva_ai_bookings from localStorage:', e);
     }
 
-    setIsLoading(false);
+    loadPlanData();
 
-    // E. Listen for live availability & booking changes
+    // F. Listen for live availability & booking changes
     const handleAvailabilityChange = () => {
       setAvailabilityVersion((v) => v + 1);
+    };
+
+    const handleServicesUpdated = () => {
+      try {
+        const selectedJson = localStorage.getItem('eva_ai_selected_services');
+        if (selectedJson) {
+          setSelectedServices(JSON.parse(selectedJson));
+        }
+      } catch {}
     };
 
     const handleBookingsUpdated = () => {
@@ -98,14 +242,20 @@ export const EventPlanPage: React.FC = () => {
     };
 
     window.addEventListener('eva_ai_availability_updated', handleAvailabilityChange);
+    window.addEventListener('eva_ai_provider_availability_updated', handleAvailabilityChange);
+    window.addEventListener('eva_ai_selected_services_updated', handleServicesUpdated);
     window.addEventListener('eva_ai_bookings_updated', handleBookingsUpdated);
     window.addEventListener('storage', handleAvailabilityChange);
+    window.addEventListener('storage', handleServicesUpdated);
     window.addEventListener('storage', handleBookingsUpdated);
 
     return () => {
       window.removeEventListener('eva_ai_availability_updated', handleAvailabilityChange);
+      window.removeEventListener('eva_ai_provider_availability_updated', handleAvailabilityChange);
+      window.removeEventListener('eva_ai_selected_services_updated', handleServicesUpdated);
       window.removeEventListener('eva_ai_bookings_updated', handleBookingsUpdated);
       window.removeEventListener('storage', handleAvailabilityChange);
+      window.removeEventListener('storage', handleServicesUpdated);
       window.removeEventListener('storage', handleBookingsUpdated);
     };
   }, []);
@@ -140,13 +290,29 @@ export const EventPlanPage: React.FC = () => {
     return selectedServices.filter((s) => !isProviderAvailable(s.providerId, eventPlan.eventDate));
   }, [selectedServices, eventPlan?.eventDate, availabilityVersion]);
 
-  // Handle removing a service from event plan
-  const handleRemoveService = (providerId: string) => {
+  // Handle removing a service from event plan (DELETE /events/:id/services/:serviceId)
+  const handleRemoveService = async (providerId: string) => {
+    const itemToRemove = selectedServices.find((s) => s.providerId === providerId);
+    const token = getStoredAccessToken();
+
+    if (token && eventPlan?.id && itemToRemove) {
+      const serviceIdentifier =
+        itemToRemove.serviceId || itemToRemove.id || itemToRemove.cartItemId || providerId;
+      try {
+        await eventsApi.removeService(eventPlan.id, serviceIdentifier);
+      } catch (apiErr: any) {
+        console.warn('Backend removeService failed on plan page:', apiErr);
+        showToast(apiErr?.message || 'Failed to remove service from backend plan.', 'warning');
+        return;
+      }
+    }
+
     const updated = selectedServices.filter((s) => s.providerId !== providerId);
     setSelectedServices(updated);
 
     try {
       localStorage.setItem('eva_ai_selected_services', JSON.stringify(updated));
+      window.dispatchEvent(new Event('eva_ai_selected_services_updated'));
     } catch (e) {
       console.warn('Failed to update eva_ai_selected_services in localStorage:', e);
     }
@@ -154,184 +320,271 @@ export const EventPlanPage: React.FC = () => {
     showToast('Service removed from your event plan.', 'info');
   };
 
-  // Handle sending booking requests with strict fresh availability validation
-  const handleSendBookingRequests = () => {
+  // Handle sending booking requests with strict fresh availability validation & backend integration
+  const handleSendBookingRequests = async () => {
     if (isSending || selectedServices.length === 0) return;
 
     setIsSending(true);
 
-    // 1. Fresh check: Re-read latest event date from localStorage
-    let currentEventDate = eventPlan?.eventDate || '';
     try {
-      const eventJson = localStorage.getItem('eva_ai_event');
-      if (eventJson) {
-        const parsed = JSON.parse(eventJson);
-        if (parsed?.eventDate) {
-          currentEventDate = parsed.eventDate;
-        }
-      }
-    } catch (e) {
-      console.warn('Failed to parse fresh eva_ai_event:', e);
-    }
-
-    // 2. Perform fresh availability check using latest localStorage availability
-    const freshAvailableServices: SelectedServiceItem[] = [];
-    const freshUnavailableServices: SelectedServiceItem[] = [];
-
-    selectedServices.forEach((service) => {
-      if (isProviderAvailable(service.providerId, currentEventDate)) {
-        freshAvailableServices.push(service);
-      } else {
-        freshUnavailableServices.push(service);
-      }
-    });
-
-    // 3. If ALL selected providers are unavailable on the event date -> BLOCK SUBMISSION
-    if (freshAvailableServices.length === 0 && freshUnavailableServices.length > 0) {
-      setIsSending(false);
-      showToast(
-        `Booking blocked: All selected providers are unavailable on your event date (${currentEventDate || 'selected date'}).`,
-        'warning'
-      );
-      return;
-    }
-
-    // 4. Fresh read of existing bookings from localStorage for duplicate detection
-    let freshExistingBookings: Booking[] = [];
-    try {
-      const bRaw = localStorage.getItem('eva_ai_bookings');
-      if (bRaw) {
-        const parsed = JSON.parse(bRaw);
-        if (Array.isArray(parsed)) freshExistingBookings = parsed;
-      }
-    } catch (e) {
-      console.warn('Failed to parse fresh eva_ai_bookings:', e);
-    }
-
-    const freshActiveMap = new Map<string, Booking>();
-    freshExistingBookings.forEach((b) => {
-      if (b.status === 'PENDING' || b.status === 'ACCEPTED') {
-        freshActiveMap.set(b.providerId, b);
-      }
-    });
-
-    // Customer Session Information
-    const customerSession = getCustomerSession();
-    const custId = customerSession?.customerId;
-    const custName = customerSession?.fullName || customer?.fullName || 'Event Host';
-    const custPhone = customerSession?.phone || customer?.phone || '+91 98471 23456';
-    const custEmail = customerSession?.email || customer?.email || 'host@eva-ai.internal';
-
-    // 5. For available providers: proceed with duplicate check and booking creation
-    const newlyCreatedBookings: Booking[] = [];
-    const alreadyRequestedProviders: string[] = [];
-
-    // Current event metadata
-    const eventId = eventPlan?.createdAt ? `event-${new Date(eventPlan.createdAt).getTime()}` : `event-current`;
-    const eventType = eventPlan?.eventType || 'Celebration';
-    const eventDate = currentEventDate;
-    const location = eventPlan?.location || '';
-    const guestCount = eventPlan?.guestCount || '';
-
-    freshAvailableServices.forEach((service) => {
-      // Check if an active booking request already exists for this provider
-      const existing = freshActiveMap.get(service.providerId);
-      if (existing) {
-        alreadyRequestedProviders.push(service.providerName);
-      } else {
-        // Create an independent mock booking record for each available provider
-        const newBooking: Booking = {
-          bookingId: `booking-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
-          providerId: service.providerId,
-          providerName: service.providerName,
-          category: service.category,
-          eventId,
-          eventType,
-          eventDate,
-          location: service.location || location,
-          guestCount,
-          startingPrice: service.startingPrice,
-          status: 'PENDING',
-          createdAt: new Date().toISOString(),
-          customerId: custId,
-          customerName: custName,
-          customerPhone: custPhone,
-          customerEmail: custEmail,
-        };
-        newlyCreatedBookings.push(newBooking);
-      }
-    });
-
-    if (newlyCreatedBookings.length > 0) {
-      const updatedBookings = [...freshExistingBookings, ...newlyCreatedBookings];
-      setExistingBookings(updatedBookings);
-
+      // 1. Fresh check: Re-read latest event date from localStorage
+      let currentEventDate = eventPlan?.eventDate || '';
       try {
-        localStorage.setItem('eva_ai_bookings', JSON.stringify(updatedBookings));
+        const eventJson = localStorage.getItem('eva_ai_event');
+        if (eventJson) {
+          const parsed = JSON.parse(eventJson);
+          if (parsed?.eventDate) {
+            currentEventDate = parsed.eventDate;
+          }
+        }
       } catch (e) {
-        console.warn('Failed to save eva_ai_bookings to localStorage:', e);
+        console.warn('Failed to parse fresh eva_ai_event:', e);
       }
 
-      // Dispatch synchronized booking update events
-      window.dispatchEvent(
-        new CustomEvent('eva_ai_bookings_updated', {
-          detail: { newlyCreatedBookings },
+      // 2. Perform fresh availability check using latest localStorage availability
+      const freshAvailableServices: SelectedServiceItem[] = [];
+      const freshUnavailableServices: SelectedServiceItem[] = [];
+
+      selectedServices.forEach((service) => {
+        if (isProviderAvailable(service.providerId, currentEventDate)) {
+          freshAvailableServices.push(service);
+        } else {
+          freshUnavailableServices.push(service);
+        }
+      });
+
+      // 3. If ALL selected providers are unavailable on the event date -> BLOCK SUBMISSION
+      if (freshAvailableServices.length === 0 && freshUnavailableServices.length > 0) {
+        showToast(
+          `Booking blocked: All selected providers are unavailable on your event date (${currentEventDate || 'selected date'}).`,
+          'warning'
+        );
+        return;
+      }
+
+      if (freshAvailableServices.length === 0) {
+        showToast('No available service providers selected.', 'warning');
+        return;
+      }
+
+      // 4. Fresh read of existing bookings from localStorage for duplicate detection
+      let freshExistingBookings: Booking[] = [];
+      try {
+        const bRaw = localStorage.getItem('eva_ai_bookings');
+        if (bRaw) {
+          const parsed = JSON.parse(bRaw);
+          if (Array.isArray(parsed)) freshExistingBookings = parsed;
+        }
+      } catch (e) {
+        console.warn('Failed to parse fresh eva_ai_bookings:', e);
+      }
+
+      const freshActiveMap = new Map<string, Booking>();
+      freshExistingBookings.forEach((b) => {
+        if (b.status === 'PENDING' || b.status === 'ACCEPTED') {
+          freshActiveMap.set(b.providerId, b);
+        }
+      });
+
+      // Customer Session Information
+      const customerSession = getCustomerSession();
+      const custId = customerSession?.customerId;
+      const custName = customerSession?.fullName || customer?.fullName || 'Event Host';
+      const custPhone = customerSession?.phone || customer?.phone || '+91 98471 23456';
+      const custEmail = customerSession?.email || customer?.email || 'host@eva-ai.internal';
+
+      const token = getStoredAccessToken();
+      const backendEventId = eventPlan?.id;
+
+      let newlyCreatedBookings: Booking[] = [];
+      const alreadyRequestedProviders: string[] = [];
+
+      // Available provider IDs to request
+      const providerIdsToSend = freshAvailableServices
+        .filter((s) => {
+          const existing = freshActiveMap.get(s.providerId);
+          if (existing) {
+            alreadyRequestedProviders.push(s.providerName);
+            return false;
+          }
+          return true;
         })
-      );
-      window.dispatchEvent(new Event('storage'));
-    }
+        .map((s) => s.providerId);
 
-    // Retain only unavailable providers in the event plan so customer can see what was skipped
-    setSelectedServices(freshUnavailableServices);
-    try {
-      localStorage.setItem('eva_ai_selected_services', JSON.stringify(freshUnavailableServices));
-    } catch (e) {
-      console.warn('Failed to update eva_ai_selected_services in localStorage:', e);
-    }
+      if (token && backendEventId && providerIdsToSend.length > 0) {
+        // Authoritative Backend Booking Dispatch: POST /events/:id/bookings
+        try {
+          const apiRes = await eventsApi.createBookings(backendEventId, {
+            providerIds: providerIdsToSend,
+          });
 
-    setIsSending(false);
+          const rawBookings =
+            apiRes?.data?.bookings ||
+            apiRes?.data ||
+            (apiRes as any)?.bookings ||
+            [];
 
-    const unavailableNames = freshUnavailableServices.map((s) => s.providerName).join(', ');
+          const normalized = normalizeBackendBookings(rawBookings);
 
-    if (alreadyRequestedProviders.length > 0 && newlyCreatedBookings.length === 0) {
-      if (freshUnavailableServices.length > 0) {
-        showToast(
-          `Already requested ${alreadyRequestedProviders.join(', ')}. Note: ${unavailableNames} skipped (unavailable on ${eventDate}).`,
-          'warning'
-        );
-      } else {
-        showToast(
-          `Booking request already sent to ${alreadyRequestedProviders.join(', ')}.`,
-          'warning'
-        );
+          if (normalized.length > 0) {
+            newlyCreatedBookings = normalized.map((b) => {
+              const matchedService = freshAvailableServices.find(
+                (s) => s.providerId === b.providerId
+              );
+              return {
+                ...b,
+                providerName: b.providerName || matchedService?.providerName || 'Service Provider',
+                category: b.category || matchedService?.category || 'General',
+                location: b.location || matchedService?.location || eventPlan?.location || '',
+                startingPrice:
+                  b.startingPrice && b.startingPrice > 0
+                    ? b.startingPrice
+                    : matchedService?.startingPrice || 0,
+                eventDate: b.eventDate || currentEventDate,
+                eventType: b.eventType || eventPlan?.eventType || 'Celebration',
+                guestCount: b.guestCount || eventPlan?.guestCount,
+                customerId: b.customerId || custId,
+                customerName: b.customerName || custName,
+                customerPhone: b.customerPhone || custPhone,
+                customerEmail: b.customerEmail || custEmail,
+              };
+            });
+          } else {
+            const single = normalizeBackendBooking(apiRes?.data || apiRes);
+            if (single.providerId || single.bookingId) {
+              newlyCreatedBookings = [single];
+            }
+          }
+        } catch (apiErr: any) {
+          console.warn('Backend createBookings error:', apiErr);
+          if (apiErr?.status === 409) {
+            showToast('One or more booking requests have already been submitted.', 'warning');
+          } else {
+            showToast(
+              apiErr?.message || 'Failed to submit booking requests to backend.',
+              'warning'
+            );
+          }
+          return;
+        }
+      } else if (!token || !backendEventId) {
+        // Offline / Local fallback path when no backend event UUID is present
+        const eventId = eventPlan?.createdAt
+          ? `event-${new Date(eventPlan.createdAt).getTime()}`
+          : `event-current`;
+        const eventType = eventPlan?.eventType || 'Celebration';
+        const eventDate = currentEventDate;
+        const location = eventPlan?.location || '';
+        const guestCount = eventPlan?.guestCount || '';
+
+        freshAvailableServices.forEach((service) => {
+          const existing = freshActiveMap.get(service.providerId);
+          if (existing) {
+            if (!alreadyRequestedProviders.includes(service.providerName)) {
+              alreadyRequestedProviders.push(service.providerName);
+            }
+          } else {
+            const newBooking: Booking = {
+              bookingId: `booking-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+              providerId: service.providerId,
+              providerName: service.providerName,
+              category: service.category,
+              eventId,
+              eventType,
+              eventDate,
+              location: service.location || location,
+              guestCount,
+              startingPrice: service.startingPrice,
+              status: 'PENDING',
+              createdAt: new Date().toISOString(),
+              customerId: custId,
+              customerName: custName,
+              customerPhone: custPhone,
+              customerEmail: custEmail,
+            };
+            newlyCreatedBookings.push(newBooking);
+          }
+        });
       }
-      const relevantActive = freshAvailableServices
-        .map((s) => activeBookingsMap.get(s.providerId))
-        .filter((b): b is Booking => Boolean(b));
-      setConfirmedBookings(relevantActive);
-    } else if (alreadyRequestedProviders.length > 0 && newlyCreatedBookings.length > 0) {
-      if (freshUnavailableServices.length > 0) {
-        showToast(
-          `Sent ${newlyCreatedBookings.length} requests. Skipped ${unavailableNames} (unavailable).`,
-          'warning'
+
+      if (newlyCreatedBookings.length > 0) {
+        // Merge without duplicating by bookingId / providerId
+        const existingIds = new Set(
+          freshExistingBookings.map((b) => b.bookingId || b.providerId)
         );
-      } else {
-        showToast(
-          `Sent ${newlyCreatedBookings.length} requests. (Already sent to ${alreadyRequestedProviders.join(', ')})`,
-          'success'
+        const filteredNew = newlyCreatedBookings.filter(
+          (b) => !existingIds.has(b.bookingId) && !existingIds.has(b.providerId)
         );
+        const updatedBookings = [...freshExistingBookings, ...filteredNew];
+        setExistingBookings(updatedBookings);
+
+        try {
+          localStorage.setItem('eva_ai_bookings', JSON.stringify(updatedBookings));
+        } catch (e) {
+          console.warn('Failed to save eva_ai_bookings to localStorage:', e);
+        }
+
+        // Dispatch synchronized booking update events
+        window.dispatchEvent(
+          new CustomEvent('eva_ai_bookings_updated', {
+            detail: { newlyCreatedBookings },
+          })
+        );
+        window.dispatchEvent(new Event('storage'));
       }
-      setConfirmedBookings(newlyCreatedBookings);
-    } else {
-      if (freshUnavailableServices.length > 0) {
-        showToast(
-          `Booking requests sent for ${newlyCreatedBookings.length} available providers. Skipped ${unavailableNames} (unavailable on ${eventDate}).`,
-          'warning'
-        );
-      } else {
-        showToast(`Booking requests created for ${newlyCreatedBookings.length} providers ✓`, 'success');
+
+      // Retain only unavailable providers in the event plan
+      setSelectedServices(freshUnavailableServices);
+      try {
+        localStorage.setItem('eva_ai_selected_services', JSON.stringify(freshUnavailableServices));
+      } catch (e) {
+        console.warn('Failed to update eva_ai_selected_services in localStorage:', e);
       }
-      setConfirmedBookings(newlyCreatedBookings);
+
+      const unavailableNames = freshUnavailableServices.map((s) => s.providerName).join(', ');
+
+      if (alreadyRequestedProviders.length > 0 && newlyCreatedBookings.length === 0) {
+        if (freshUnavailableServices.length > 0) {
+          showToast(
+            `Already requested ${alreadyRequestedProviders.join(', ')}. Note: ${unavailableNames} skipped (unavailable on ${currentEventDate}).`,
+            'warning'
+          );
+        } else {
+          showToast(
+            `Booking request already sent to ${alreadyRequestedProviders.join(', ')}.`,
+            'warning'
+          );
+        }
+        const relevantActive = freshAvailableServices
+          .map((s) => activeBookingsMap.get(s.providerId))
+          .filter((b): b is Booking => Boolean(b));
+        setConfirmedBookings(relevantActive);
+      } else if (alreadyRequestedProviders.length > 0 && newlyCreatedBookings.length > 0) {
+        if (freshUnavailableServices.length > 0) {
+          showToast(
+            `Sent ${newlyCreatedBookings.length} requests. Skipped ${unavailableNames} (unavailable).`,
+            'warning'
+          );
+        } else {
+          showToast(
+            `Sent ${newlyCreatedBookings.length} requests. (Already sent to ${alreadyRequestedProviders.join(', ')})`,
+            'success'
+          );
+        }
+        setConfirmedBookings(newlyCreatedBookings);
+      } else {
+        if (freshUnavailableServices.length > 0) {
+          showToast(
+            `Booking requests sent for ${newlyCreatedBookings.length} available providers. Skipped ${unavailableNames} (unavailable on ${currentEventDate}).`,
+            'warning'
+          );
+        } else {
+          showToast(`Booking requests created for ${newlyCreatedBookings.length} providers ✓`, 'success');
+        }
+        setConfirmedBookings(newlyCreatedBookings);
+      }
+    } finally {
+      setIsSending(false);
     }
   };
 
@@ -516,8 +769,8 @@ export const EventPlanPage: React.FC = () => {
                 {/* Right Column: Budget Overview Card */}
                 <div className="lg:col-span-4">
                   <BudgetOverview
-                    totalBudget={eventPlan?.budget || ''}
-                    estimatedCost={estimatedCost}
+                    totalBudget={backendPlanMetrics?.totalBudget ?? eventPlan?.budget ?? ''}
+                    estimatedCost={backendPlanMetrics?.estimatedCost ?? estimatedCost}
                     selectedCount={selectedServices.length}
                     unavailableCount={unavailableServices.length}
                     onSendBookingRequests={handleSendBookingRequests}

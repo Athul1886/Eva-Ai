@@ -3,7 +3,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import Icon from '../common/Icon';
 import ThemeToggle from '../common/ThemeToggle';
 import { ProviderSession } from '../../types/provider';
-import { clearProviderSession, getProviderProfile, getProviderSession } from '../../utils/providerAuth';
+import { logoutProvider, getProviderProfile, getProviderSession } from '../../utils/providerAuth';
 
 interface ProviderHeaderProps {
   session: ProviderSession | null;
@@ -34,8 +34,8 @@ export const ProviderHeader: React.FC<ProviderHeaderProps> = ({ session, onToggl
     };
   }, [session?.providerId, session?.profileImage]);
 
-  const handleLogout = () => {
-    clearProviderSession();
+  const handleLogout = async () => {
+    await logoutProvider();
     navigate('/login');
   };
 

@@ -3,8 +3,10 @@ import { Link, useNavigate } from 'react-router-dom';
 import Header from '../components/layout/Header';
 import Footer from '../components/layout/Footer';
 import Icon from '../components/common/Icon';
-import { EventPlanData, formatIndianRupees } from '../types/event';
+import { EventPlanData, formatIndianRupees, extractEventData } from '../types/event';
 import { CustomerProfileData } from './CustomerSignupPage';
+import { normalizeBackendBookings } from '../types/booking';
+import { eventsApi, bookingsApi, getStoredAccessToken } from '../api/api';
 
 export const CustomerDashboardPage: React.FC = () => {
   const navigate = useNavigate();
@@ -15,54 +17,141 @@ export const CustomerDashboardPage: React.FC = () => {
   const [isLoading, setIsLoading] = useState<boolean>(true);
 
   useEffect(() => {
-    // Read saved event plan
-    try {
-      const eventJson = localStorage.getItem('eva_ai_event');
-      if (eventJson) {
-        setEventPlan(JSON.parse(eventJson));
-      }
-    } catch (e) {
-      console.warn('Failed to parse eva_ai_event from localStorage:', e);
-    }
+    let isMounted = true;
 
-    // Read saved customer profile
-    try {
-      const customerJson = localStorage.getItem('eva_ai_customer');
-      if (customerJson) {
-        setCustomer(JSON.parse(customerJson));
+    async function loadDashboardData() {
+      // 1. Read local cache first for immediate layout rehydration
+      let localEvent: EventPlanData | null = null;
+      try {
+        const eventJson = localStorage.getItem('eva_ai_event');
+        if (eventJson) {
+          localEvent = JSON.parse(eventJson);
+          if (isMounted) {
+            setEventPlan(localEvent);
+          }
+        }
+      } catch (e) {
+        console.warn('Failed to parse eva_ai_event from localStorage:', e);
       }
-    } catch (e) {
-      console.warn('Failed to parse eva_ai_customer from localStorage:', e);
-    }
 
-    // Read saved selected services count
-    try {
-      const selectedJson = localStorage.getItem('eva_ai_selected_services');
-      if (selectedJson) {
-        const parsed = JSON.parse(selectedJson);
-        if (Array.isArray(parsed)) {
-          setSelectedServicesCount(parsed.length);
+      // 2. Read saved customer profile
+      try {
+        const customerJson = localStorage.getItem('eva_ai_customer');
+        if (customerJson && isMounted) {
+          setCustomer(JSON.parse(customerJson));
+        }
+      } catch (e) {
+        console.warn('Failed to parse eva_ai_customer from localStorage:', e);
+      }
+
+      // 3. Read saved selected services count
+      try {
+        const selectedJson = localStorage.getItem('eva_ai_selected_services');
+        if (selectedJson && isMounted) {
+          const parsed = JSON.parse(selectedJson);
+          if (Array.isArray(parsed)) {
+            setSelectedServicesCount(parsed.length);
+          }
+        }
+      } catch (e) {
+        console.warn('Failed to parse eva_ai_selected_services from localStorage:', e);
+      }
+
+      // 4. Read saved bookings count
+      try {
+        const bookingsJson = localStorage.getItem('eva_ai_bookings');
+        if (bookingsJson && isMounted) {
+          const parsed = JSON.parse(bookingsJson);
+          if (Array.isArray(parsed)) {
+            const pending = parsed.filter((b) => b.status === 'PENDING').length;
+            setBookingsSummary({ total: parsed.length, pending });
+          }
+        }
+      } catch (e) {
+        console.warn('Failed to parse eva_ai_bookings from localStorage:', e);
+      }
+
+      // 5. Fetch authoritative event & bookings data from backend API if authenticated
+      const token = getStoredAccessToken();
+      if (token) {
+        try {
+          let backendEvent: EventPlanData | null = null;
+
+          // If local event already has a backend ID, fetch single event
+          if (localEvent?.id) {
+            try {
+              const res = await eventsApi.getById(localEvent.id);
+              backendEvent = extractEventData(res);
+            } catch (err: any) {
+              backendEvent = null;
+            }
+          }
+
+          // If no event by specific ID, fetch all customer events
+          if (!backendEvent) {
+            const listRes = await eventsApi.getAll();
+            const rawData: any = listRes?.data;
+            const rawList =
+              rawData?.events ||
+              (Array.isArray(rawData) ? rawData : null) ||
+              (listRes as any)?.events ||
+              (Array.isArray(listRes) ? listRes : []);
+            const eventsList = Array.isArray(rawList) ? rawList : [];
+
+            if (eventsList.length > 0) {
+              const latest = eventsList[eventsList.length - 1];
+              backendEvent = extractEventData({ data: latest });
+            }
+          }
+
+          if (backendEvent && isMounted) {
+            setEventPlan(backendEvent);
+            localStorage.setItem('eva_ai_event', JSON.stringify(backendEvent));
+          }
+
+          // Fetch authoritative bookings count
+          try {
+            const bRes: any = await bookingsApi.getMyBookings();
+            const rawBookings =
+              bRes?.data?.bookings ||
+              bRes?.data ||
+              bRes?.bookings ||
+              bRes;
+            if (Array.isArray(rawBookings) || Array.isArray(bRes?.data)) {
+              const normalized = normalizeBackendBookings(rawBookings);
+              const pending = normalized.filter((b) => b.status === 'PENDING').length;
+              if (isMounted) {
+                setBookingsSummary({ total: normalized.length, pending });
+                localStorage.setItem('eva_ai_bookings', JSON.stringify(normalized));
+              }
+            }
+          } catch (bErr) {
+            console.warn('Backend bookings fetch on dashboard warning:', bErr);
+          }
+        } catch (apiErr) {
+          console.warn('Failed to fetch events from backend:', apiErr);
         }
       }
-    } catch (e) {
-      console.warn('Failed to parse eva_ai_selected_services from localStorage:', e);
-    }
 
-    // Read saved bookings count
-    try {
-      const bookingsJson = localStorage.getItem('eva_ai_bookings');
-      if (bookingsJson) {
-        const parsed = JSON.parse(bookingsJson);
-        if (Array.isArray(parsed)) {
-          const pending = parsed.filter((b) => b.status === 'PENDING').length;
-          setBookingsSummary({ total: parsed.length, pending });
-        }
+      if (isMounted) {
+        setIsLoading(false);
       }
-    } catch (e) {
-      console.warn('Failed to parse eva_ai_bookings from localStorage:', e);
     }
 
-    setIsLoading(false);
+    loadDashboardData();
+
+    const handleSync = () => {
+      loadDashboardData();
+    };
+
+    window.addEventListener('eva_ai_bookings_updated', handleSync);
+    window.addEventListener('storage', handleSync);
+
+    return () => {
+      isMounted = false;
+      window.removeEventListener('eva_ai_bookings_updated', handleSync);
+      window.removeEventListener('storage', handleSync);
+    };
   }, []);
 
   const formatDateDisplay = (dateStr?: string) => {

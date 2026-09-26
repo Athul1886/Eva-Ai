@@ -2,7 +2,12 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import Icon from '../common/Icon';
 import ThemeToggle from '../common/ThemeToggle';
-import { CustomerSession, clearCustomerSession, getCustomerSession } from '../../utils/customerAuth';
+import {
+  CustomerSession,
+  clearCustomerSession,
+  getCustomerSession,
+  logoutCustomer,
+} from '../../utils/customerAuth';
 
 interface CustomerHeaderProps {
   session?: CustomerSession | null;
@@ -46,9 +51,12 @@ export const CustomerHeader: React.FC<CustomerHeaderProps> = ({ session: initial
     setDropdownOpen(false);
   }, [location.pathname]);
 
-  const handleLogout = () => {
-    clearCustomerSession();
-    navigate('/login');
+  const handleLogout = async () => {
+    try {
+      await logoutCustomer();
+    } finally {
+      navigate('/login/customer');
+    }
   };
 
   const navLinks = [

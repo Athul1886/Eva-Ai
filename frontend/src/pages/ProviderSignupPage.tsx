@@ -7,9 +7,14 @@ import { ProviderCategoryType, CategorySpecificData, ProviderAccount, ProviderSe
 import {
   saveProviderAccount,
   setProviderSession,
-  hashPassword,
   seedDemoBookingIfEmpty,
 } from '../utils/providerAuth';
+import {
+  authApi,
+  setStoredAccessToken,
+  setStoredRefreshToken,
+  ApiError,
+} from '../api/api';
 
 const CATEGORIES: { id: ProviderCategoryType; label: string; icon: string; subtitle: string }[] = [
   { id: 'Photographer', label: 'Photographer', icon: 'photo_camera', subtitle: 'Cinematography & Heirloom Albums' },
@@ -203,58 +208,151 @@ export const ProviderSignupPage: React.FC = () => {
     }
   };
 
-  const handleFinalSubmit = (e: React.FormEvent) => {
+  const handleFinalSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!validateStep4()) return;
 
     setIsSubmitting(true);
+    setErrors((prev) => {
+      const copy = { ...prev };
+      delete copy.submit;
+      return copy;
+    });
 
-    const providerId = `provider-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 7)}`;
+    const cleanEmail = (accountData.email.trim() || basicInfo.email.trim()).toLowerCase();
     const startingPriceNum = Number(basicInfo.startingPrice.toString().replace(/[^0-9]/g, '')) || 25000;
     const yearsExpNum = Number(basicInfo.yearsExperience) || 3;
 
-    const newProvider: ProviderAccount = {
-      id: providerId,
-      fullName: basicInfo.fullName.trim(),
-      businessName: basicInfo.businessName.trim(),
-      email: (accountData.email.trim() || basicInfo.email.trim()).toLowerCase(),
-      phone: basicInfo.phone.trim(),
-      location: basicInfo.location.trim(),
-      description: basicInfo.description.trim(),
-      yearsExperience: yearsExpNum,
-      startingPrice: startingPriceNum,
-      category: selectedCategory as ProviderCategoryType,
-      profileImage: basicInfo.profileImage,
-      passwordHash: hashPassword(accountData.password),
-      categoryData: catData,
-      createdAt: new Date().toISOString(),
-    };
+    try {
+      // 1. Submit registration payload to backend API (do NOT send confirmPassword or auth tokens)
+      const res = await authApi.register({
+        fullName: basicInfo.fullName.trim(),
+        businessName: basicInfo.businessName.trim(),
+        email: cleanEmail,
+        password: accountData.password,
+        phone: basicInfo.phone.trim(),
+        location: basicInfo.location.trim(),
+        role: 'provider',
+        category: selectedCategory as ProviderCategoryType,
+        description: basicInfo.description.trim(),
+        yearsExperience: yearsExpNum,
+        startingPrice: startingPriceNum,
+      });
 
-    // Save account to localStorage
-    saveProviderAccount(newProvider);
+      // 2. Extract access token, refresh token, and backend user info
+      const accessToken =
+        res?.data?.session?.access_token ||
+        res?.data?.accessToken ||
+        res?.data?.token ||
+        res?.session?.access_token ||
+        res?.token ||
+        res?.accessToken ||
+        null;
 
-    // Seed a mock booking request for this provider so they immediately have requests to accept/reject
-    seedDemoBookingIfEmpty(providerId, newProvider.businessName, newProvider.category);
+      const refreshToken =
+        res?.data?.session?.refresh_token ||
+        res?.data?.refreshToken ||
+        res?.session?.refresh_token ||
+        res?.refreshToken ||
+        null;
 
-    // Create session
-    const session: ProviderSession = {
-      providerId: newProvider.id,
-      businessName: newProvider.businessName,
-      fullName: newProvider.fullName,
-      email: newProvider.email,
-      category: newProvider.category,
-      profileImage: newProvider.profileImage,
-      loginAt: new Date().toISOString(),
-    };
-    setProviderSession(session);
+      const backendUser =
+        res?.data?.user && typeof res.data.user === 'object'
+          ? res.data.user
+          : res?.user && typeof res.user === 'object'
+          ? res.user
+          : (res?.data && typeof res.data === 'object' && ('id' in res.data || 'email' in res.data))
+          ? res.data
+          : null;
 
-    setTimeout(() => {
+      const backendUserId =
+        backendUser?.id || backendUser?._id || backendUser?.userId || backendUser?.providerId || res?.data?.provider?.id;
+
+      // 3. Centralized token persistence
+      if (accessToken) {
+        setStoredAccessToken(accessToken);
+      }
+      if (refreshToken) {
+        setStoredRefreshToken(refreshToken);
+      }
+
+      const finalProviderId = backendUserId || `provider-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 7)}`;
+
+      // 4. Update local provider profile cache (NEVER store password or passwordHash)
+      const newProvider: ProviderAccount = {
+        id: finalProviderId,
+        fullName: backendUser?.fullName || basicInfo.fullName.trim(),
+        businessName: backendUser?.businessName || basicInfo.businessName.trim(),
+        email: backendUser?.email || cleanEmail,
+        phone: backendUser?.phone || basicInfo.phone.trim(),
+        location: backendUser?.location || basicInfo.location.trim(),
+        description: backendUser?.description || basicInfo.description.trim(),
+        yearsExperience: yearsExpNum,
+        startingPrice: startingPriceNum,
+        category: selectedCategory as ProviderCategoryType,
+        profileImage: basicInfo.profileImage,
+        categoryData: catData,
+        createdAt: backendUser?.createdAt || new Date().toISOString(),
+      };
+      saveProviderAccount(newProvider);
+
+      // Seed a demo booking request for this provider so they immediately have requests to accept/reject
+      seedDemoBookingIfEmpty(finalProviderId, newProvider.businessName, newProvider.category);
+
+      // 5. Create provider session
+      const session: ProviderSession = {
+        providerId: finalProviderId,
+        userId: backendUserId || undefined,
+        businessName: newProvider.businessName,
+        fullName: newProvider.fullName,
+        email: newProvider.email,
+        category: newProvider.category,
+        profileImage: newProvider.profileImage,
+        loginAt: new Date().toISOString(),
+        token: accessToken || undefined,
+        role: 'provider',
+      };
+      setProviderSession(session);
+
       setIsSubmitting(false);
       setIsSuccess(true);
       setTimeout(() => {
         navigate('/provider/dashboard');
       }, 1200);
-    }, 900);
+    } catch (err: any) {
+      setIsSubmitting(false);
+      if (err instanceof ApiError) {
+        if (
+          err.status === 409 ||
+          err.errorKey === 'USER_ALREADY_EXISTS' ||
+          err.message?.toLowerCase().includes('already registered') ||
+          err.message?.toLowerCase().includes('already exists')
+        ) {
+          setErrors((prev) => ({
+            ...prev,
+            submit: 'An account with this email address is already registered. Please sign in instead.',
+            accountEmail: 'This email address is already in use.',
+          }));
+        } else if (err.status === 400) {
+          const msg =
+            err.message ||
+            (err.missingFields && err.missingFields.length > 0
+              ? `Missing required fields: ${err.missingFields.join(', ')}`
+              : 'Please verify all registration details.');
+          setErrors((prev) => ({ ...prev, submit: msg }));
+        } else {
+          setErrors((prev) => ({
+            ...prev,
+            submit: err.message || 'Registration failed. Please try again later or check your connection.',
+          }));
+        }
+      } else {
+        setErrors((prev) => ({
+          ...prev,
+          submit: 'Registration failed due to a network issue. Please check your connection and try again.',
+        }));
+      }
+    }
   };
 
   // Toggle multi-select tags in category data
@@ -1062,6 +1160,14 @@ export const ProviderSignupPage: React.FC = () => {
                         Set up your provider login credentials to access your booking management portal.
                       </p>
                     </div>
+
+                    {/* Submit Error Banner */}
+                    {errors.submit && (
+                      <div className="p-3.5 rounded-xl bg-error/15 border border-error/30 text-error text-xs font-medium flex items-center gap-2.5 animate-in fade-in duration-150">
+                        <Icon name="error" className="text-[18px] shrink-0" />
+                        <span>{errors.submit}</span>
+                      </div>
+                    )}
 
                     {/* Login Email */}
                     <div>

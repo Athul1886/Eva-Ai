@@ -1,4 +1,7 @@
 export interface EventPlanData {
+  id?: string;
+  userId?: string;
+  customerId?: string;
   eventType: string;
   eventDate: string;
   location: string;
@@ -7,7 +10,52 @@ export interface EventPlanData {
   services: string[];
   preferences: string[];
   additionalNotes: string;
+  status?: string;
   createdAt?: string;
+  updatedAt?: string;
+}
+
+/**
+ * Safely parses and extracts normalized EventPlanData from API responses.
+ */
+export function extractEventData(res: any): EventPlanData | null {
+  if (!res) return null;
+  const raw = res?.data?.event || res?.data || res?.event || res;
+  if (!raw || typeof raw !== 'object') return null;
+  return {
+    id: raw.id || raw._id || raw.eventId,
+    userId: raw.userId || raw.customerId,
+    customerId: raw.customerId || raw.userId,
+    eventType: raw.eventType || raw.type || '',
+    eventDate: raw.eventDate || raw.date || '',
+    location: raw.location || raw.venue || '',
+    guestCount:
+      typeof raw.guestCount === 'number'
+        ? raw.guestCount
+        : raw.guestCount
+        ? Number(raw.guestCount)
+        : '',
+    budget:
+      typeof raw.budget === 'number'
+        ? raw.budget
+        : raw.budget
+        ? Number(raw.budget)
+        : '',
+    services: Array.isArray(raw.services)
+      ? raw.services
+      : Array.isArray(raw.requestedServices)
+      ? raw.requestedServices
+      : [],
+    preferences: Array.isArray(raw.preferences)
+      ? raw.preferences
+      : Array.isArray(raw.stylePreferences)
+      ? raw.stylePreferences
+      : [],
+    additionalNotes: raw.additionalNotes || raw.notes || '',
+    status: raw.status,
+    createdAt: raw.createdAt,
+    updatedAt: raw.updatedAt,
+  };
 }
 
 export const INITIAL_EVENT_DATA: EventPlanData = {

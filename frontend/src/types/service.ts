@@ -59,6 +59,9 @@ export interface CategoryInfo {
 }
 
 export interface SelectedServiceItem {
+  id?: string;
+  cartItemId?: string;
+  serviceId?: string;
   providerId: string;
   providerName: string;
   category: string;
@@ -66,6 +69,8 @@ export interface SelectedServiceItem {
   startingPrice: number;
   selectedAt: string;
   imageUrl?: string;
+  notes?: string;
+  packageDetails?: any;
 }
 
 export interface ServiceFilterState {

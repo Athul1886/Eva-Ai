@@ -5,7 +5,13 @@ import { Provider, SelectedServiceItem } from '../types/service';
 import { ProviderAccount } from '../types/provider';
 import { EventPlanData, formatIndianRupees } from '../types/event';
 import { Booking } from '../types/booking';
-import { isProviderAvailable, getDisplayProvider } from '../utils/providerAuth';
+import {
+  isProviderAvailable,
+  getDisplayProvider,
+  fetchAndCacheProviderAvailability,
+  fetchAndCacheProviderDetails,
+} from '../utils/providerAuth';
+import { eventsApi, getStoredAccessToken } from '../api/api';
 
 export const ProviderDetailsPage: React.FC = () => {
   const { providerId } = useParams<{ providerId: string }>();
@@ -32,6 +38,14 @@ export const ProviderDetailsPage: React.FC = () => {
           setProvider(null);
           setAccount(null);
         }
+
+        // Authoritative backend fetch
+        fetchAndCacheProviderDetails(providerId).then((fresh) => {
+          if (fresh) {
+            setProvider(fresh.provider);
+            setAccount(fresh.account);
+          }
+        });
       }
     };
 
@@ -93,16 +107,32 @@ export const ProviderDetailsPage: React.FC = () => {
       }
       setAvailabilityVersion((v) => v + 1);
       reloadProvider();
-      checkContactUnlocked();
+      if (providerId) {
+        fetchAndCacheProviderAvailability(providerId)
+          .then(() => {
+            setAvailabilityVersion((v) => v + 1);
+          })
+          .catch(() => {});
+      }
     };
 
+    if (providerId) {
+      fetchAndCacheProviderAvailability(providerId)
+        .then(() => {
+          setAvailabilityVersion((v) => v + 1);
+        })
+        .catch(() => {});
+    }
+
     window.addEventListener('eva_ai_availability_updated', handleAvailabilityUpdate);
+    window.addEventListener('eva_ai_provider_availability_updated', handleAvailabilityUpdate);
     window.addEventListener('eva_ai_provider_profile_updated', reloadProvider);
     window.addEventListener('eva_ai_bookings_updated', checkContactUnlocked);
     window.addEventListener('storage', handleAvailabilityUpdate);
 
     return () => {
       window.removeEventListener('eva_ai_availability_updated', handleAvailabilityUpdate);
+      window.removeEventListener('eva_ai_provider_availability_updated', handleAvailabilityUpdate);
       window.removeEventListener('eva_ai_provider_profile_updated', reloadProvider);
       window.removeEventListener('eva_ai_bookings_updated', checkContactUnlocked);
       window.removeEventListener('storage', handleAvailabilityUpdate);
@@ -116,8 +146,9 @@ export const ProviderDetailsPage: React.FC = () => {
 
   const isAdded = selectedServices.some((s) => s.providerId === provider?.id);
   const isAvailable = isProviderAvailable(provider?.id || '', eventPlan?.eventDate);
+  const [isAdding, setIsAdding] = useState<boolean>(false);
 
-  const handleAddToEvent = () => {
+  const handleAddToEvent = async () => {
     if (!provider) return;
 
     if (!isAvailable) {
@@ -130,24 +161,57 @@ export const ProviderDetailsPage: React.FC = () => {
       return;
     }
 
-    const newItem: SelectedServiceItem = {
-      providerId: provider.id,
-      providerName: provider.name,
-      category: provider.category,
-      location: provider.location,
-      startingPrice: provider.startingPrice,
-      selectedAt: new Date().toISOString(),
-      imageUrl: provider.images[0],
-    };
-
-    const updated = [...selectedServices, newItem];
-    setSelectedServices(updated);
+    if (isAdding) return;
+    setIsAdding(true);
 
     try {
-      localStorage.setItem('eva_ai_selected_services', JSON.stringify(updated));
-      showToast(`Added ${provider.name} to your event plan ✓`);
-    } catch (e) {
-      console.warn('Failed to save to localStorage:', e);
+      let backendCartItemId: string | undefined = undefined;
+      const token = getStoredAccessToken();
+
+      if (token && eventPlan?.id) {
+        try {
+          const res = await eventsApi.addService(eventPlan.id, {
+            providerId: provider.id,
+            providerName: provider.name,
+            category: provider.category,
+            location: provider.location,
+            startingPrice: provider.startingPrice,
+            imageUrl: provider.images[0],
+          });
+          backendCartItemId =
+            res?.data?.cartItemId ||
+            res?.data?.id ||
+            res?.data?.serviceId ||
+            (res as any)?.cartItemId ||
+            (res as any)?.id;
+        } catch (apiErr: any) {
+          console.warn('Backend addService warning in provider details:', apiErr);
+        }
+      }
+
+      const newItem: SelectedServiceItem = {
+        cartItemId: backendCartItemId,
+        providerId: provider.id,
+        providerName: provider.name,
+        category: provider.category,
+        location: provider.location,
+        startingPrice: provider.startingPrice,
+        selectedAt: new Date().toISOString(),
+        imageUrl: provider.images[0],
+      };
+
+      const updated = [...selectedServices, newItem];
+      setSelectedServices(updated);
+
+      try {
+        localStorage.setItem('eva_ai_selected_services', JSON.stringify(updated));
+        window.dispatchEvent(new Event('eva_ai_selected_services_updated'));
+        showToast(`Added ${provider.name} to your event plan ✓`);
+      } catch (e) {
+        console.warn('Failed to save to localStorage:', e);
+      }
+    } finally {
+      setIsAdding(false);
     }
   };
 

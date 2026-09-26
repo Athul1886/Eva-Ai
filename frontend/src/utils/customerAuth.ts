@@ -1,15 +1,27 @@
 import { CustomerProfileData } from '../pages/CustomerSignupPage';
+import {
+  authApi,
+  getStoredAccessToken,
+  setStoredAccessToken,
+  getStoredRefreshToken,
+  setStoredRefreshToken,
+  ApiError,
+} from '../api/api';
+export type { CustomerProfileData };
 
 export const CUSTOMER_SESSION_KEY = 'eva_ai_customer_session';
 export const CUSTOMER_PROFILE_KEY = 'eva_ai_customer';
 
 export interface CustomerSession {
   customerId: string;
+  userId?: string;
   fullName: string;
   email: string;
   phone?: string;
   location?: string;
   loginAt: string;
+  token?: string;
+  role?: string;
 }
 
 // Default fallback demo customer if user wants quick instant login without prior signup
@@ -48,14 +60,154 @@ export function setCustomerSession(session: CustomerSession): void {
 }
 
 /**
- * Clear customer session from localStorage (preserves event, bookings, and selected services)
+ * Clear only customer session and auth tokens from localStorage
+ * Preserves all non-auth customer data (eva_ai_customer, eva_ai_event, eva_ai_event_plan, eva_ai_selected_services, eva_ai_bookings)
  */
 export function clearCustomerSession(): void {
   try {
     localStorage.removeItem(CUSTOMER_SESSION_KEY);
+    setStoredAccessToken(null);
+    setStoredRefreshToken(null);
     window.dispatchEvent(new Event('eva_ai_customer_session_updated'));
   } catch (err) {
     console.warn('Failed to clear customer session from localStorage:', err);
+  }
+}
+
+/**
+ * Performs customer logout:
+ * 1. Attempts POST /auth/logout backend request with current Bearer token
+ * 2. Clears authentication/session data (tokens and customer session)
+ * 3. Preserves all non-auth event/booking/profile data
+ * 4. Ensures frontend session cleanup completes even if backend request fails
+ */
+export async function logoutCustomer(): Promise<void> {
+  try {
+    await authApi.logout();
+  } catch {
+    // Best-effort backend notification handled in authApi.logout
+  } finally {
+    clearCustomerSession();
+  }
+}
+
+export interface VerifyCustomerSessionResult {
+  valid: boolean;
+  user?: any;
+  error?: string;
+  status?: number;
+}
+
+let activeVerificationPromise: Promise<VerifyCustomerSessionResult> | null = null;
+
+/**
+ * Reusable mechanism for verifying and rehydrating the current customer session using GET /auth/me.
+ * Sends Authorization: Bearer <access_token>.
+ * Validates role === "customer" and user.isActive !== false.
+ * Updates local customer session and profile with backend user data as authoritative source.
+ * Preserves event, event-plan, selected services, and bookings data.
+ */
+export async function verifyCustomerSession(): Promise<VerifyCustomerSessionResult> {
+  if (activeVerificationPromise) {
+    return activeVerificationPromise;
+  }
+
+  activeVerificationPromise = (async () => {
+    let token = getStoredAccessToken();
+    const currentSession = getCustomerSession();
+    const refreshToken = getStoredRefreshToken();
+
+    // If no access token exists but a refresh token is present, attempt refresh first
+    if (!token && refreshToken) {
+      try {
+        const refreshRes = await authApi.refresh(refreshToken);
+        token = refreshRes?.data?.token || getStoredAccessToken();
+      } catch {
+        clearCustomerSession();
+        return { valid: false, error: 'REFRESH_FAILED' };
+      }
+    }
+
+    // If no token exists at all
+    if (!token) {
+      if (!currentSession) {
+        return { valid: false, error: 'NO_SESSION' };
+      }
+      return { valid: false, error: 'NO_TOKEN' };
+    }
+
+    try {
+      const res = await authApi.me();
+      const user = res?.data?.user || res?.user || res?.data;
+
+      if (!user) {
+        return { valid: false, error: 'INVALID_USER_DATA' };
+      }
+
+      // Role check: must be customer
+      if (user.role && user.role !== 'customer') {
+        clearCustomerSession();
+        return { valid: false, error: 'INVALID_ROLE' };
+      }
+
+      // Status check: must not be deactivated
+      if (user.isActive === false) {
+        clearCustomerSession();
+        return { valid: false, error: 'ACCOUNT_DEACTIVATED' };
+      }
+
+      // Update customer profile & session with backend user data as source of truth (NEVER store password or headers)
+      const customerProfile: CustomerProfileData = {
+        fullName: user.fullName || currentSession?.fullName || user.email?.split('@')[0] || '',
+        email: user.email || currentSession?.email || '',
+        phone: user.phone || currentSession?.phone || '',
+        location: user.location || currentSession?.location || '',
+        createdAt: user.createdAt || currentSession?.loginAt || new Date().toISOString(),
+      };
+      saveCustomerProfile(customerProfile);
+
+      const latestToken = getStoredAccessToken() || token;
+      const updatedSession: CustomerSession = {
+        customerId: user.id || user._id || user.userId || currentSession?.customerId || `cust_${btoa(customerProfile.email).substring(0, 10)}`,
+        userId: user.id || user._id || user.userId || currentSession?.userId,
+        fullName: customerProfile.fullName,
+        email: customerProfile.email,
+        phone: customerProfile.phone,
+        location: customerProfile.location,
+        loginAt: currentSession?.loginAt || new Date().toISOString(),
+        token: latestToken,
+        role: 'customer',
+      };
+      setCustomerSession(updatedSession);
+
+      return { valid: true, user };
+    } catch (err: any) {
+      if (err instanceof ApiError) {
+        if (err.status === 401) {
+          // Expired or invalid token: clear session but preserve unrelated event/booking data
+          clearCustomerSession();
+          return { valid: false, status: 401, error: 'UNAUTHORIZED' };
+        }
+        if (err.status === 403) {
+          clearCustomerSession();
+          return { valid: false, status: 403, error: 'FORBIDDEN' };
+        }
+      }
+
+      // For transient network failures when an existing session is in localStorage,
+      // preserve the existing customer session without immediately failing the user
+      if (currentSession) {
+        return { valid: true, user: currentSession, error: 'OFFLINE_FALLBACK' };
+      }
+
+      return { valid: false, error: err?.message || 'VERIFICATION_FAILED' };
+    }
+  })();
+
+  try {
+    return await activeVerificationPromise;
+  } finally {
+    activeVerificationPromise = null;
   }
 }
 
@@ -90,6 +242,7 @@ export function saveCustomerProfile(profile: CustomerProfileData): void {
       });
     }
     window.dispatchEvent(new Event('eva_ai_customer_session_updated'));
+    window.dispatchEvent(new Event('eva_ai_customer_profile_updated'));
   } catch (err) {
     console.warn('Failed to save customer profile to localStorage:', err);
   }

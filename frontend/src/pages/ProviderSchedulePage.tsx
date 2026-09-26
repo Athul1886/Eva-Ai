@@ -1,18 +1,29 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useOutletContext } from 'react-router-dom';
 import Icon from '../components/common/Icon';
 import { ProviderSession } from '../types/provider';
 import {
   getProviderAvailability,
   saveProviderAvailability,
+  normalizeUnavailableDates,
 } from '../utils/providerAuth';
+import { providersApi, ApiError } from '../api/api';
 
 export const ProviderSchedulePage: React.FC = () => {
   const { session } = useOutletContext<{ session: ProviderSession }>();
   const [currentDate, setCurrentDate] = useState<Date>(new Date());
   const [unavailableDates, setUnavailableDates] = useState<string[]>([]);
   const [selectedDateStr, setSelectedDateStr] = useState<string | null>(null);
-  const [saveSuccessNotice, setSaveSuccessNotice] = useState(false);
+  const [saveNotice, setSaveNotice] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
+  const [isLoading, setIsLoading] = useState<boolean>(false);
+  const [isSaving, setIsSaving] = useState<boolean>(false);
+
+  const showToast = (message: string, type: 'success' | 'error' = 'success', duration = 3500) => {
+    setSaveNotice({ message, type });
+    setTimeout(() => {
+      setSaveNotice((prev) => (prev?.message === message ? null : prev));
+    }, duration);
+  };
 
   // Robust local date string helper avoiding timezone shift
   const formatLocalDate = (d: Date): string => {
@@ -24,14 +35,67 @@ export const ProviderSchedulePage: React.FC = () => {
 
   const todayStr = formatLocalDate(new Date());
 
-  useEffect(() => {
-    if (session?.providerId) {
-      const dates = getProviderAvailability(session.providerId);
-      // Existing past dates in localStorage should be ignored/removed from editable schedule state
-      const validDates = dates.filter((d) => d >= todayStr);
+  const loadAvailability = useCallback(async (silent = false) => {
+    if (!session?.providerId) return;
+
+    // 1. Initial fast local cache read for layout rendering
+    if (!silent) {
+      const cached = getProviderAvailability(session.providerId);
+      const validCached = cached.filter((d) => d >= todayStr);
+      setUnavailableDates(validCached);
+    }
+
+    // 2. Fetch authoritative availability from backend
+    try {
+      if (!silent) setIsLoading(true);
+      let res: any = null;
+      try {
+        res = await providersApi.getAvailability();
+      } catch (getErr: any) {
+        // Fallback to getUnavailableDates if getAvailability is specific to authenticated provider profile
+        if (session.providerId) {
+          res = await providersApi.getUnavailableDates(session.providerId);
+        } else {
+          throw getErr;
+        }
+      }
+
+      const raw = res?.data ?? res;
+      const backendDates = normalizeUnavailableDates(raw);
+      const validDates = backendDates.filter((d) => d >= todayStr);
+
+      // Backend response takes precedence over localStorage
       setUnavailableDates(validDates);
+      saveProviderAvailability(session.providerId, validDates);
+    } catch (err: any) {
+      console.warn('Failed fetching provider availability from backend:', err);
+      if (err instanceof ApiError) {
+        if (err.status === 401) {
+          // Handled by token refresh / auth invalidation
+        } else if (err.status === 403) {
+          showToast('Access denied: You do not have permission to view this schedule.', 'error');
+        }
+      }
+    } finally {
+      if (!silent) setIsLoading(false);
     }
   }, [session?.providerId, todayStr]);
+
+  useEffect(() => {
+    loadAvailability(false);
+
+    const handleSync = () => {
+      loadAvailability(true);
+    };
+
+    window.addEventListener('eva_ai_provider_availability_updated', handleSync);
+    window.addEventListener('storage', handleSync);
+
+    return () => {
+      window.removeEventListener('eva_ai_provider_availability_updated', handleSync);
+      window.removeEventListener('storage', handleSync);
+    };
+  }, [loadAvailability]);
 
   // Calendar Helpers
   const year = currentDate.getFullYear();
@@ -82,14 +146,46 @@ export const ProviderSchedulePage: React.FC = () => {
     });
   };
 
-  const handleSaveSchedule = () => {
-    if (session?.providerId) {
-      // Ensure only today and future dates are saved
-      const cleanDates = unavailableDates.filter((d) => d >= todayStr);
+  const handleSaveSchedule = async () => {
+    if (!session?.providerId || isSaving) return;
+
+    // Ensure only today and future dates are saved
+    const cleanDates = unavailableDates.filter((d) => d >= todayStr);
+
+    setIsSaving(true);
+
+    try {
+      // 1. Authoritative backend request: PUT /providers/availability/sync
+      const res: any = await providersApi.syncAvailability({
+        dates: cleanDates,
+        unavailableDates: cleanDates,
+      });
+
+      // 2. Normalize backend response if dates returned
+      const raw = res?.data ?? res;
+      const returnedDates = normalizeUnavailableDates(raw);
+      const finalDates = returnedDates.length > 0 ? returnedDates.filter((d) => d >= todayStr) : cleanDates;
+
+      setUnavailableDates(finalDates);
+      saveProviderAvailability(session.providerId, finalDates);
+      showToast('Schedule & Availability synchronized successfully with server!', 'success');
+    } catch (err: any) {
+      console.warn('Failed to sync schedule with backend:', err);
+      // Fallback: save to localStorage cache so provider does not lose changes
       saveProviderAvailability(session.providerId, cleanDates);
       setUnavailableDates(cleanDates);
-      setSaveSuccessNotice(true);
-      setTimeout(() => setSaveSuccessNotice(false), 3000);
+
+      if (err instanceof ApiError) {
+        if (err.status === 403) {
+          showToast('Permission denied: You cannot modify this availability schedule.', 'error');
+        } else {
+          showToast(err.message || 'Server error syncing schedule. Saved locally as fallback.', 'error');
+        }
+      } else {
+        showToast('Network error: Unable to reach server. Saved locally as fallback.', 'error');
+      }
+    } finally {
+      setIsSaving(false);
     }
   };
 
@@ -110,10 +206,19 @@ export const ProviderSchedulePage: React.FC = () => {
   return (
     <div className="space-y-6 sm:space-y-8 animate-in fade-in duration-300 w-full min-w-0 max-w-full">
       {/* Toast Notification */}
-      {saveSuccessNotice && (
-        <div className="fixed bottom-6 right-6 z-50 p-4 rounded-2xl bg-surface-container-high/95 backdrop-blur-xl border border-secondary/40 shadow-2xl text-secondary text-sm font-semibold flex items-center gap-3 animate-in slide-in-from-bottom duration-200 max-w-[calc(100vw-3rem)]">
-          <Icon name="check_circle" className="text-[20px] shrink-0" />
-          <span className="break-words">Schedule &amp; Availability saved successfully to local storage!</span>
+      {saveNotice && (
+        <div
+          className={`fixed bottom-6 right-6 z-50 p-4 rounded-2xl backdrop-blur-xl border shadow-2xl text-sm font-semibold flex items-center gap-3 animate-in slide-in-from-bottom duration-200 max-w-[calc(100vw-3rem)] ${
+            saveNotice.type === 'error'
+              ? 'bg-error-container/95 border-error/40 text-on-error-container'
+              : 'bg-surface-container-high/95 border-secondary/40 text-secondary'
+          }`}
+        >
+          <Icon
+            name={saveNotice.type === 'error' ? 'error' : 'check_circle'}
+            className="text-[20px] shrink-0"
+          />
+          <span className="break-words">{saveNotice.message}</span>
         </div>
       )}
 
@@ -142,18 +247,39 @@ export const ProviderSchedulePage: React.FC = () => {
         <div className="flex flex-col xs:flex-row items-stretch xs:items-center gap-2.5 w-full md:w-auto">
           <button
             type="button"
+            onClick={() => loadAvailability(false)}
+            disabled={isLoading || isSaving}
+            className="px-3.5 py-2.5 rounded-xl bg-surface-container hover:bg-surface-container-high text-on-surface text-xs font-semibold border border-surface-container-highest transition-colors text-center flex items-center justify-center gap-1.5"
+            title="Refresh schedule from server"
+          >
+            <Icon name="refresh" className={`text-[16px] ${isLoading ? 'animate-spin' : ''}`} />
+            <span>{isLoading ? 'Syncing...' : 'Refresh'}</span>
+          </button>
+          <button
+            type="button"
             onClick={handleClearAll}
-            className="px-4 py-2.5 rounded-xl bg-surface-container hover:bg-surface-container-high text-on-surface text-xs font-semibold border border-surface-container-highest transition-colors text-center"
+            disabled={isSaving}
+            className="px-4 py-2.5 rounded-xl bg-surface-container hover:bg-surface-container-high disabled:opacity-50 text-on-surface text-xs font-semibold border border-surface-container-highest transition-colors text-center"
           >
             Clear Blackouts
           </button>
           <button
             type="button"
+            disabled={isSaving}
             onClick={handleSaveSchedule}
-            className="px-5 py-2.5 rounded-xl bg-secondary hover:bg-secondary-fixed-dim text-on-secondary-fixed text-xs font-bold transition-all shadow-[0_0_20px_rgba(255,178,190,0.3)] flex items-center justify-center gap-2 text-center"
+            className="px-5 py-2.5 rounded-xl bg-secondary hover:bg-secondary-fixed-dim disabled:opacity-50 text-on-secondary-fixed text-xs font-bold transition-all shadow-[0_0_20px_rgba(255,178,190,0.3)] flex items-center justify-center gap-2 text-center"
           >
-            <Icon name="save" className="text-[16px]" />
-            <span>Save Schedule</span>
+            {isSaving ? (
+              <>
+                <span className="w-4 h-4 border-2 border-on-secondary-fixed border-t-transparent rounded-full animate-spin" />
+                <span>Saving...</span>
+              </>
+            ) : (
+              <>
+                <Icon name="save" className="text-[16px]" />
+                <span>Save Schedule</span>
+              </>
+            )}
           </button>
         </div>
       </div>
@@ -345,11 +471,21 @@ export const ProviderSchedulePage: React.FC = () => {
 
             <button
               type="button"
+              disabled={isSaving}
               onClick={handleSaveSchedule}
-              className="w-full py-3.5 rounded-xl bg-secondary hover:bg-secondary-fixed-dim text-on-secondary-fixed font-bold text-xs transition-all shadow-[0_0_15px_rgba(255,178,190,0.25)] flex items-center justify-center gap-2"
+              className="w-full py-3.5 rounded-xl bg-secondary hover:bg-secondary-fixed-dim disabled:opacity-50 text-on-secondary-fixed font-bold text-xs transition-all shadow-[0_0_15px_rgba(255,178,190,0.25)] flex items-center justify-center gap-2"
             >
-              <Icon name="save" className="text-[16px]" />
-              <span>Save Changes</span>
+              {isSaving ? (
+                <>
+                  <span className="w-4 h-4 border-2 border-on-secondary-fixed border-t-transparent rounded-full animate-spin" />
+                  <span>Saving...</span>
+                </>
+              ) : (
+                <>
+                  <Icon name="save" className="text-[16px]" />
+                  <span>Save Changes</span>
+                </>
+              )}
             </button>
           </div>
 

@@ -10,7 +10,13 @@ import EventScaleStep from '../components/onboarding/EventScaleStep';
 import ServicesStep from '../components/onboarding/ServicesStep';
 import PreferencesStep from '../components/onboarding/PreferencesStep';
 import ReviewStep from '../components/onboarding/ReviewStep';
-import { EventPlanData, INITIAL_EVENT_DATA, AVAILABLE_SERVICES } from '../types/event';
+import {
+  EventPlanData,
+  INITIAL_EVENT_DATA,
+  AVAILABLE_SERVICES,
+  extractEventData,
+} from '../types/event';
+import { eventsApi, getStoredAccessToken } from '../api/api';
 
 export const EventOnboardingPage: React.FC = () => {
   const navigate = useNavigate();
@@ -230,29 +236,93 @@ export const EventOnboardingPage: React.FC = () => {
     setEventData((prev) => ({ ...prev, additionalNotes: notes }));
   };
 
-  // Final submission to localStorage
-  const handleFinalSubmit = () => {
+  // Final submission to Backend API & localStorage
+  const handleFinalSubmit = async () => {
     if (!validateAll()) return;
 
     setIsSubmitting(true);
 
     try {
-      const completedPlan: EventPlanData = {
-        ...eventData,
-        createdAt: new Date().toISOString(),
+      const payload = {
+        eventType: eventData.eventType,
+        eventDate: eventData.eventDate,
+        location: eventData.location.trim(),
+        guestCount:
+          typeof eventData.guestCount === 'number'
+            ? eventData.guestCount
+            : Number(eventData.guestCount) || 0,
+        budget:
+          typeof eventData.budget === 'number'
+            ? eventData.budget
+            : Number(eventData.budget) || 0,
+        services: eventData.services,
+        preferences: eventData.preferences,
+        additionalNotes: eventData.additionalNotes.trim(),
       };
 
-      // 1. Save event planning information to localStorage under `eva_ai_event`
-      localStorage.setItem('eva_ai_event', JSON.stringify(completedPlan));
+      const token = getStoredAccessToken();
+      let savedPlan: EventPlanData;
 
-      // 2. Note: customer profile under `eva_ai_customer` remains completely untouched and preserved.
+      if (token) {
+        // Authenticated customer: sync with backend API
+        if (eventData.id) {
+          try {
+            // Update existing event via PUT /events/:id
+            const res = await eventsApi.update(eventData.id, payload);
+            const backendEvent = extractEventData(res);
+            savedPlan = backendEvent || {
+              ...eventData,
+              ...payload,
+              updatedAt: new Date().toISOString(),
+            };
+          } catch (updateErr) {
+            console.warn('Backend update failed, attempting create as fallback:', updateErr);
+            const createRes = await eventsApi.create(payload);
+            const backendEvent = extractEventData(createRes);
+            savedPlan = backendEvent || {
+              ...eventData,
+              ...payload,
+              createdAt: new Date().toISOString(),
+            };
+          }
+        } else {
+          // Create new event via POST /events
+          const res = await eventsApi.create(payload);
+          const backendEvent = extractEventData(res);
+          savedPlan = backendEvent || {
+            ...eventData,
+            ...payload,
+            createdAt: new Date().toISOString(),
+          };
+        }
+      } else {
+        // Unauthenticated visitor draft
+        savedPlan = {
+          ...eventData,
+          ...payload,
+          createdAt: eventData.createdAt || new Date().toISOString(),
+        };
+      }
+
+      // 1. Save event planning information containing the backend event UUID
+      localStorage.setItem('eva_ai_event', JSON.stringify(savedPlan));
+
+      // 2. Note: eva_ai_customer, eva_ai_event_plan, eva_ai_selected_services, eva_ai_bookings remain preserved.
 
       // 3. Navigate to /customer/dashboard
       setTimeout(() => {
         navigate('/customer/dashboard');
       }, 350);
     } catch (e) {
-      console.error('Failed to save event data to localStorage:', e);
+      console.error('Failed to submit event plan to backend:', e);
+      // Preserve local draft on network failure
+      const fallbackPlan: EventPlanData = {
+        ...eventData,
+        createdAt: eventData.createdAt || new Date().toISOString(),
+      };
+      localStorage.setItem('eva_ai_event', JSON.stringify(fallbackPlan));
+      navigate('/customer/dashboard');
+    } finally {
       setIsSubmitting(false);
     }
   };

@@ -3,7 +3,8 @@ import { Link, useNavigate } from 'react-router-dom';
 import Header from '../components/layout/Header';
 import Footer from '../components/layout/Footer';
 import Icon from '../components/common/Icon';
-import { setCustomerSession, CustomerSession } from '../utils/customerAuth';
+import { setCustomerSession, saveCustomerProfile, CustomerSession } from '../utils/customerAuth';
+import { authApi, setStoredAccessToken, setStoredRefreshToken, ApiError } from '../api/api';
 
 export interface CustomerProfileData {
   fullName: string;
@@ -26,6 +27,7 @@ export const CustomerSignupPage: React.FC = () => {
   });
 
   const [errors, setErrors] = useState<Record<string, string>>({});
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const [isSuccess, setIsSuccess] = useState(false);
   const [savedProfile, setSavedProfile] = useState<CustomerProfileData | null>(null);
 
@@ -81,45 +83,127 @@ export const CustomerSignupPage: React.FC = () => {
     return Object.keys(newErrors).length === 0;
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
-    if (validate()) {
-      // Temporary frontend storage in localStorage (NEVER store sensitive passwords)
-      const customerData: CustomerProfileData = {
+    if (!validate()) {
+      return;
+    }
+
+    setIsSubmitting(true);
+    try {
+      // 1. Submit registration payload to backend API (do NOT send confirmPassword)
+      const res = await authApi.registerCustomer({
         fullName: formData.fullName.trim(),
         email: formData.email.trim().toLowerCase(),
+        password: formData.password,
         phone: formData.phone.trim(),
         location: formData.location.trim(),
-        createdAt: new Date().toISOString(),
+      });
+
+      // 2. Extract access token, refresh token, and backend user info
+      const accessToken =
+        res?.data?.session?.access_token ||
+        res?.data?.accessToken ||
+        res?.data?.token ||
+        res?.session?.access_token ||
+        res?.token ||
+        res?.accessToken ||
+        null;
+
+      const refreshToken =
+        res?.data?.session?.refresh_token ||
+        res?.data?.refreshToken ||
+        res?.session?.refresh_token ||
+        res?.refreshToken ||
+        null;
+
+      const backendUser =
+        res?.data?.user && typeof res.data.user === 'object'
+          ? res.data.user
+          : res?.user && typeof res.user === 'object'
+          ? res.user
+          : (res?.data && typeof res.data === 'object' && ('id' in res.data || 'email' in res.data))
+          ? res.data
+          : null;
+
+      const backendUserId =
+        backendUser?.id || backendUser?._id || backendUser?.userId || null;
+
+      // 3. Centralized token persistence
+      if (accessToken) {
+        setStoredAccessToken(accessToken);
+      }
+      if (refreshToken) {
+        setStoredRefreshToken(refreshToken);
+      }
+
+      // 4. Source of truth customer profile & session for frontend compatibility (password is NEVER stored)
+      const customerData: CustomerProfileData = {
+        fullName: backendUser?.fullName || formData.fullName.trim(),
+        email: backendUser?.email || formData.email.trim().toLowerCase(),
+        phone: backendUser?.phone || formData.phone.trim(),
+        location: backendUser?.location || formData.location.trim(),
+        createdAt: backendUser?.createdAt || new Date().toISOString(),
       };
 
-      try {
-        localStorage.setItem('eva_ai_customer', JSON.stringify(customerData));
-        const customerSession: CustomerSession = {
-          customerId: `cust_${btoa(customerData.email).substring(0, 10)}`,
-          fullName: customerData.fullName,
-          email: customerData.email,
-          phone: customerData.phone,
-          location: customerData.location,
-          loginAt: new Date().toISOString(),
-        };
-        setCustomerSession(customerSession);
-      } catch (storageErr) {
-        console.warn('Unable to write to localStorage:', storageErr);
-      }
+      const customerSession: CustomerSession = {
+        customerId: backendUserId || `cust_${btoa(customerData.email).substring(0, 10)}`,
+        userId: backendUserId || undefined,
+        fullName: customerData.fullName,
+        email: customerData.email,
+        phone: customerData.phone,
+        location: customerData.location,
+        loginAt: new Date().toISOString(),
+        token: accessToken || undefined,
+      };
+
+      // Store in localStorage without passwords
+      saveCustomerProfile(customerData);
+      setCustomerSession(customerSession);
 
       setSavedProfile(customerData);
       setIsSuccess(true);
       window.scrollTo({ top: 0, behavior: 'smooth' });
+    } catch (err: any) {
+      if (err instanceof ApiError) {
+        if (err.status === 409) {
+          setErrors({
+            email: 'This email is already registered.',
+            general: 'This email address is already registered. Please sign in instead.',
+          });
+        } else if (err.status === 400) {
+          const msg =
+            err.message ||
+            (err.missingFields && err.missingFields.length > 0
+              ? `Missing required fields: ${err.missingFields.join(', ')}`
+              : 'Please check your information and try again.');
+          setErrors({ general: msg });
+        } else {
+          setErrors({
+            general: 'Registration failed. Please try again later or check your network connection.',
+          });
+        }
+      } else {
+        setErrors({
+          general: 'Registration failed. Please check your connection and try again.',
+        });
+      }
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const { name, value } = e.target;
     setFormData((prev) => ({ ...prev, [name]: value }));
-    if (errors[name]) {
-      setErrors((prev) => ({ ...prev, [name]: '' }));
+    if (errors[name] || errors.general) {
+      setErrors((prev) => {
+        const next = { ...prev };
+        delete next[name];
+        delete next.general;
+        return next;
+      });
     }
   };
 
@@ -212,6 +296,12 @@ export const CustomerSignupPage: React.FC = () => {
             ) : (
               /* Registration Form */
               <form onSubmit={handleSubmit} noValidate className="space-y-4">
+                {errors.general && (
+                  <div className="p-3.5 rounded-xl bg-error/10 border border-error/30 text-error font-body-sm text-sm flex items-center gap-2">
+                    <Icon name="error" className="text-[20px] shrink-0" />
+                    <span>{errors.general}</span>
+                  </div>
+                )}
                 {/* Full Name */}
                 <div>
                   <label className="block font-label-md text-label-md text-outline uppercase mb-1">
@@ -349,9 +439,10 @@ export const CustomerSignupPage: React.FC = () => {
                 <div className="pt-4">
                   <button
                     type="submit"
-                    className="w-full py-4 rounded-xl bg-primary hover:bg-tertiary text-on-primary font-title-md text-title-md font-bold transition-all shadow-[0_0_20px_rgba(242,202,80,0.3)] hover:shadow-[0_0_30px_rgba(242,202,80,0.5)] flex items-center justify-center gap-2"
+                    disabled={isSubmitting}
+                    className="w-full py-4 rounded-xl bg-primary hover:bg-tertiary text-on-primary font-title-md text-title-md font-bold transition-all shadow-[0_0_20px_rgba(242,202,80,0.3)] hover:shadow-[0_0_30px_rgba(242,202,80,0.5)] flex items-center justify-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed"
                   >
-                    <span>Create Customer Account</span>
+                    <span>{isSubmitting ? 'Creating Customer Account...' : 'Create Customer Account'}</span>
                     <Icon name="arrow_forward" className="text-[18px]" />
                   </button>
                 </div>

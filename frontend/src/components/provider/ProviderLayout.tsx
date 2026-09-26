@@ -2,19 +2,71 @@ import React, { useState, useEffect } from 'react';
 import { Navigate, Outlet, useLocation } from 'react-router-dom';
 import ProviderHeader from './ProviderHeader';
 import ProviderSidebar from './ProviderSidebar';
-import { getProviderSession } from '../../utils/providerAuth';
+import { getProviderSession, verifyProviderSession } from '../../utils/providerAuth';
 import { ProviderSession } from '../../types/provider';
+import { getStoredAccessToken, getStoredRefreshToken } from '../../api/api';
 
 export const ProviderLayout: React.FC = () => {
+  const location = useLocation();
   const [session, setSession] = useState<ProviderSession | null>(getProviderSession());
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
-  const location = useLocation();
 
+  // Determine if we need to verify session on initial mount
+  const hasTokens = Boolean(getStoredAccessToken() || getStoredRefreshToken());
+  const [isVerifying, setIsVerifying] = useState<boolean>(hasTokens);
+
+  // 1. Verify and rehydrate backend session once on mount if tokens exist
   useEffect(() => {
-    // Re-check session on location change
+    let isMounted = true;
+    const token = getStoredAccessToken();
+    const refreshToken = getStoredRefreshToken();
+
+    if (token || refreshToken) {
+      verifyProviderSession().then((result) => {
+        if (!isMounted) return;
+        if (!result.valid) {
+          setSession(null);
+        } else {
+          setSession(getProviderSession());
+        }
+        setIsVerifying(false);
+      });
+    } else {
+      setIsVerifying(false);
+    }
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  // 2. Sync local session on storage and internal session events
+  useEffect(() => {
+    const handleUpdate = () => {
+      setSession(getProviderSession());
+    };
+    window.addEventListener('eva_ai_provider_session_updated', handleUpdate);
+    return () => {
+      window.removeEventListener('eva_ai_provider_session_updated', handleUpdate);
+    };
+  }, []);
+
+  // 3. Re-check session on location change
+  useEffect(() => {
     setSession(getProviderSession());
     setMobileSidebarOpen(false);
   }, [location.pathname]);
+
+  // Loading state during initial verification to avoid flash of content
+  if (isVerifying) {
+    return (
+      <div className="bg-surface font-body-md text-on-surface antialiased min-h-screen flex items-center justify-center">
+        <div className="flex flex-col items-center gap-3">
+          <div className="w-8 h-8 border-2 border-secondary/30 border-t-secondary rounded-full animate-spin" />
+        </div>
+      </div>
+    );
+  }
 
   // Route protection: If no active provider session, redirect to /login/provider
   if (!session) {

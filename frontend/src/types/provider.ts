@@ -66,18 +66,23 @@ export interface ProviderAccount {
   category: ProviderCategoryType;
   profileImage?: string;
   passwordHash?: string;
+  approvalStatus?: string;
   categoryData: CategorySpecificData;
   createdAt: string;
+  updatedAt?: string;
 }
 
 export interface ProviderSession {
   providerId: string;
+  userId?: string;
   businessName: string;
   fullName: string;
   email: string;
   category: string;
   profileImage?: string;
   loginAt: string;
+  token?: string;
+  role?: string;
 }
 
 export interface ProviderAvailability {

@@ -4,10 +4,11 @@ import Icon from '../components/common/Icon';
 import BookingCard from '../components/bookings/BookingCard';
 import BookingSummary, { FilterStatus } from '../components/bookings/BookingSummary';
 import BookingFilters from '../components/bookings/BookingFilters';
-import { Booking } from '../types/booking';
-import { EventPlanData, formatIndianRupees } from '../types/event';
+import { Booking, normalizeBackendBookings } from '../types/booking';
+import { EventPlanData, formatIndianRupees, extractEventData } from '../types/event';
 import { CustomerProfileData } from './CustomerSignupPage';
 import { getCustomerSession } from '../utils/customerAuth';
+import { bookingsApi, eventsApi, getStoredAccessToken } from '../api/api';
 
 export const MyBookingsPage: React.FC = () => {
   const [bookings, setBookings] = useState<Booking[]>([]);
@@ -16,7 +17,7 @@ export const MyBookingsPage: React.FC = () => {
   const [activeFilter, setActiveFilter] = useState<FilterStatus>('ALL');
   const [isLoading, setIsLoading] = useState<boolean>(true);
 
-  const loadBookings = () => {
+  const loadLocalBookings = () => {
     try {
       const bookingsJson = localStorage.getItem('eva_ai_bookings');
       if (bookingsJson) {
@@ -24,7 +25,6 @@ export const MyBookingsPage: React.FC = () => {
         if (Array.isArray(parsed)) {
           const session = getCustomerSession();
           if (session?.customerId) {
-            // Customer session isolation: Only show bookings belonging to this customer
             const userBookings = parsed.filter((b) => {
               if (b.customerId) return b.customerId === session.customerId;
               if (b.customerEmail && session.email) {
@@ -48,42 +48,121 @@ export const MyBookingsPage: React.FC = () => {
     }
   };
 
-  // Load bookings and event data from localStorage
+  // Load bookings and event data with backend authority
   useEffect(() => {
-    // 1. Read bookings
-    loadBookings();
+    let isMounted = true;
 
-    // 2. Read event information
-    try {
-      const eventJson = localStorage.getItem('eva_ai_event');
-      if (eventJson) {
-        setEventPlan(JSON.parse(eventJson));
+    async function fetchBookingsData() {
+      // 1. Read local cache first for immediate layout responsiveness
+      loadLocalBookings();
+
+      let localEvent: EventPlanData | null = null;
+      try {
+        const eventJson = localStorage.getItem('eva_ai_event');
+        if (eventJson) {
+          localEvent = JSON.parse(eventJson);
+          if (isMounted) {
+            setEventPlan(localEvent);
+          }
+        }
+      } catch (e) {
+        console.warn('Failed to parse eva_ai_event from localStorage:', e);
       }
-    } catch (e) {
-      console.warn('Failed to parse eva_ai_event from localStorage:', e);
+
+      try {
+        const customerJson = localStorage.getItem('eva_ai_customer');
+        if (customerJson && isMounted) {
+          setCustomer(JSON.parse(customerJson));
+        }
+      } catch (e) {
+        console.warn('Failed to parse eva_ai_customer from localStorage:', e);
+      }
+
+      // 2. Fetch authoritative bookings and event from backend API if authenticated
+      const token = getStoredAccessToken();
+      if (token) {
+        try {
+          // A. Authoritative Bookings Rehydration (GET /bookings/my)
+          try {
+            const bookingsRes: any = await bookingsApi.getMyBookings();
+            const rawBookings =
+              bookingsRes?.data?.bookings ||
+              bookingsRes?.data ||
+              bookingsRes?.bookings ||
+              bookingsRes;
+
+            if (Array.isArray(rawBookings) || Array.isArray(bookingsRes?.data)) {
+              const backendBookings = normalizeBackendBookings(rawBookings);
+              if (isMounted) {
+                setBookings(backendBookings);
+                localStorage.setItem('eva_ai_bookings', JSON.stringify(backendBookings));
+              }
+            }
+          } catch (bErr) {
+            console.warn('Failed to fetch bookings from backend:', bErr);
+          }
+
+          // B. Authoritative Event Rehydration
+          try {
+            let backendEvent: EventPlanData | null = null;
+            if (localEvent?.id) {
+              try {
+                const res = await eventsApi.getById(localEvent.id);
+                backendEvent = extractEventData(res);
+              } catch {
+                backendEvent = null;
+              }
+            }
+
+            if (!backendEvent) {
+              const listRes = await eventsApi.getAll();
+              const rawData: any = listRes?.data;
+              const rawList =
+                rawData?.events ||
+                (Array.isArray(rawData) ? rawData : null) ||
+                (listRes as any)?.events ||
+                (Array.isArray(listRes) ? listRes : []);
+              const eventsList = Array.isArray(rawList) ? rawList : [];
+
+              if (eventsList.length > 0) {
+                const latest = eventsList[eventsList.length - 1];
+                backendEvent = extractEventData({ data: latest });
+              }
+            }
+
+            if (backendEvent && isMounted) {
+              setEventPlan(backendEvent);
+              localStorage.setItem('eva_ai_event', JSON.stringify(backendEvent));
+            }
+          } catch (eErr) {
+            console.warn('Failed to fetch event details in MyBookings:', eErr);
+          }
+        } catch (apiErr) {
+          console.warn('Backend rehydration error in MyBookings:', apiErr);
+        }
+      }
+
+      if (isMounted) {
+        setIsLoading(false);
+      }
     }
 
-    // 3. Read customer profile if present
-    try {
-      const customerJson = localStorage.getItem('eva_ai_customer');
-      if (customerJson) {
-        setCustomer(JSON.parse(customerJson));
-      }
-    } catch (e) {
-      console.warn('Failed to parse eva_ai_customer from localStorage:', e);
-    }
+    fetchBookingsData();
 
-    setIsLoading(false);
+    // 3. Live synchronization listeners
+    const handleSync = () => {
+      fetchBookingsData();
+    };
 
-    // 4. Live synchronization listeners for status changes across tabs/windows
-    window.addEventListener('eva_ai_bookings_updated', loadBookings);
-    window.addEventListener('storage', loadBookings);
-    window.addEventListener('eva_ai_customer_session_updated', loadBookings);
+    window.addEventListener('eva_ai_bookings_updated', handleSync);
+    window.addEventListener('storage', handleSync);
+    window.addEventListener('eva_ai_customer_session_updated', handleSync);
 
     return () => {
-      window.removeEventListener('eva_ai_bookings_updated', loadBookings);
-      window.removeEventListener('storage', loadBookings);
-      window.removeEventListener('eva_ai_customer_session_updated', loadBookings);
+      isMounted = false;
+      window.removeEventListener('eva_ai_bookings_updated', handleSync);
+      window.removeEventListener('storage', handleSync);
+      window.removeEventListener('eva_ai_customer_session_updated', handleSync);
     };
   }, []);
 

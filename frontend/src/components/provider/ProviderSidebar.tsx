@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { NavLink, useNavigate } from 'react-router-dom';
 import Icon from '../common/Icon';
-import { clearProviderSession, getProviderBookings } from '../../utils/providerAuth';
+import { logoutProvider, getProviderBookings } from '../../utils/providerAuth';
 import { ProviderSession } from '../../types/provider';
 
 interface ProviderSidebarProps {
@@ -15,15 +15,26 @@ export const ProviderSidebar: React.FC<ProviderSidebarProps> = ({ session, isOpe
   const [pendingCount, setPendingCount] = useState<number>(0);
 
   useEffect(() => {
-    if (session?.providerId) {
-      const bookings = getProviderBookings(session.providerId);
-      const pending = bookings.filter((b) => b.status === 'PENDING').length;
-      setPendingCount(pending);
-    }
+    const updateCount = () => {
+      if (session?.providerId) {
+        const bookings = getProviderBookings(session.providerId);
+        const pending = bookings.filter((b) => b.status === 'PENDING').length;
+        setPendingCount(pending);
+      }
+    };
+
+    updateCount();
+    window.addEventListener('eva_ai_bookings_updated', updateCount);
+    window.addEventListener('storage', updateCount);
+
+    return () => {
+      window.removeEventListener('eva_ai_bookings_updated', updateCount);
+      window.removeEventListener('storage', updateCount);
+    };
   }, [session?.providerId]);
 
-  const handleLogout = () => {
-    clearProviderSession();
+  const handleLogout = async () => {
+    await logoutProvider();
     navigate('/login');
   };
 

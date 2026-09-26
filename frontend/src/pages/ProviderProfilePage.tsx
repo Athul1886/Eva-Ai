@@ -1,8 +1,16 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useOutletContext } from 'react-router-dom';
 import Icon from '../components/common/Icon';
 import { ProviderAccount, ProviderSession, CategorySpecificData } from '../types/provider';
-import { getProviderProfile, updateProviderProfile, compressImageFile } from '../utils/providerAuth';
+import {
+  getProviderProfile,
+  updateProviderProfile,
+  compressImageFile,
+  normalizeBackendProviderProfile,
+  saveProviderAccount,
+  setProviderSession,
+} from '../utils/providerAuth';
+import { providersApi, ApiError, getStoredAccessToken } from '../api/api';
 
 export const ProviderProfilePage: React.FC = () => {
   const { session } = useOutletContext<{ session: ProviderSession }>();
@@ -10,7 +18,9 @@ export const ProviderProfilePage: React.FC = () => {
   const [isEditing, setIsEditing] = useState(false);
   const [editForm, setEditForm] = useState<Partial<ProviderAccount>>({});
   const [editCategoryData, setEditCategoryData] = useState<CategorySpecificData>({});
-  const [saveSuccess, setSaveSuccess] = useState<string | null>(null);
+  const [toastNotice, setToastNotice] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
+  const [isSaving, setIsSaving] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
 
   // Profile Photo Management State
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -18,48 +28,191 @@ export const ProviderProfilePage: React.FC = () => {
   const [photoFileError, setPhotoFileError] = useState<string | null>(null);
   const [isSavingPhoto, setIsSavingPhoto] = useState(false);
 
-  useEffect(() => {
-    if (session?.providerId) {
-      const data = getProviderProfile(session.providerId);
-      setProfile(data);
-      if (data) {
-        setEditForm({
-          businessName: data.businessName,
-          fullName: data.fullName,
-          phone: data.phone,
-          location: data.location,
-          description: data.description,
-          startingPrice: data.startingPrice,
-          yearsExperience: data.yearsExperience,
-        });
-        setEditCategoryData(data.categoryData || {});
+  const showToast = (message: string, type: 'success' | 'error' = 'success', duration = 3500) => {
+    setToastNotice({ message, type });
+    setTimeout(() => {
+      setToastNotice((prev) => (prev?.message === message ? null : prev));
+    }, duration);
+  };
+
+  const loadProfile = useCallback(async (silent = false) => {
+    const providerId = session?.providerId;
+    if (!providerId) return;
+
+    // 1. Initial fast local cache read for layout responsiveness
+    const cachedProfile = getProviderProfile(providerId);
+    if (cachedProfile) {
+      setProfile(cachedProfile);
+      setEditForm({
+        businessName: cachedProfile.businessName,
+        fullName: cachedProfile.fullName,
+        phone: cachedProfile.phone,
+        location: cachedProfile.location,
+        description: cachedProfile.description,
+        startingPrice: cachedProfile.startingPrice,
+        yearsExperience: cachedProfile.yearsExperience,
+      });
+      setEditCategoryData(cachedProfile.categoryData || {});
+    }
+
+    // 2. Fetch authoritative provider profile from backend via GET /providers/profile
+    const token = getStoredAccessToken();
+    if (token) {
+      try {
+        if (!silent) setIsLoading(true);
+        const res: any = await providersApi.getProfile();
+        const normalized = normalizeBackendProviderProfile(res, cachedProfile);
+
+        if (normalized) {
+          // Backend data is authoritative source of truth
+          setProfile(normalized);
+          setEditForm({
+            businessName: normalized.businessName,
+            fullName: normalized.fullName,
+            phone: normalized.phone,
+            location: normalized.location,
+            description: normalized.description,
+            startingPrice: normalized.startingPrice,
+            yearsExperience: normalized.yearsExperience,
+          });
+          setEditCategoryData(normalized.categoryData || {});
+          saveProviderAccount(normalized);
+
+          // Update active session if relevant fields changed
+          if (session) {
+            setProviderSession({
+              ...session,
+              providerId: normalized.id,
+              businessName: normalized.businessName,
+              fullName: normalized.fullName,
+              email: normalized.email || session.email,
+              category: normalized.category,
+              profileImage: normalized.profileImage || session.profileImage,
+            });
+          }
+        }
+      } catch (err: any) {
+        console.warn('Failed fetching authoritative provider profile from backend:', err);
+        if (err instanceof ApiError) {
+          if (err.status === 401) {
+            // Handled by centralized auth
+          } else if (err.status === 403) {
+            showToast('Account access restricted or deactivated.', 'error');
+          }
+        }
+      } finally {
+        if (!silent) setIsLoading(false);
       }
     }
-  }, [session?.providerId]);
+  }, [session]);
 
-  const handleEditSave = (e: React.FormEvent) => {
+  useEffect(() => {
+    loadProfile(false);
+
+    const handleSync = () => {
+      loadProfile(true);
+    };
+
+    window.addEventListener('eva_ai_provider_session_updated', handleSync);
+    window.addEventListener('eva_ai_provider_profile_updated', handleSync);
+    window.addEventListener('storage', handleSync);
+
+    return () => {
+      window.removeEventListener('eva_ai_provider_session_updated', handleSync);
+      window.removeEventListener('eva_ai_provider_profile_updated', handleSync);
+      window.removeEventListener('storage', handleSync);
+    };
+  }, [loadProfile]);
+
+  const handleEditSave = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (session?.providerId && editForm) {
-      const currentCatData = profile?.categoryData || {};
-      const updatedCatData: CategorySpecificData = {
-        ...currentCatData,
-        ...editCategoryData,
-        // preserve packages and gallery images safely
-        portfolioImages: currentCatData.portfolioImages,
-        packageInfo: currentCatData.packageInfo,
-      };
+    const providerId = session?.providerId;
+    if (!providerId || !profile || isSaving) return;
 
-      const updated = updateProviderProfile(session.providerId, {
-        ...editForm,
-        categoryData: updatedCatData,
+    // Validate inputs
+    const businessName = (editForm.businessName || profile.businessName || '').trim();
+    const fullName = (editForm.fullName || profile.fullName || '').trim();
+    if (!businessName || !fullName) {
+      showToast('Please provide both brand name and lead partner name.', 'error');
+      return;
+    }
+
+    // Decouple portfolio and pricing packages from profile payload (they have dedicated endpoints)
+    const { portfolioImages: _ignoredPortfolio, packageInfo: _ignoredPackages, ...categorySpecializations } =
+      (editCategoryData as any) || {};
+
+    // Construct clean profile payload containing only supported profile fields
+    const payload = {
+      businessName,
+      fullName,
+      phone: (editForm.phone ?? profile.phone ?? '').trim(),
+      location: (editForm.location ?? profile.location ?? '').trim(),
+      description: (editForm.description ?? profile.description ?? '').trim(),
+      startingPrice: Number(editForm.startingPrice ?? profile.startingPrice ?? 25000),
+      yearsExperience: Number(editForm.yearsExperience ?? profile.yearsExperience ?? 5),
+      category: profile.category,
+      categoryData: categorySpecializations,
+    };
+
+    setIsSaving(true);
+
+    try {
+      // Authoritative backend request: PUT /providers/profile (without portfolio/pricing coupling)
+      const res: any = await providersApi.updateProfile(payload);
+      const normalized = normalizeBackendProviderProfile(res, {
+        ...profile,
+        ...payload,
+        categoryData: {
+          ...profile.categoryData,
+          ...categorySpecializations,
+          portfolioImages: profile.categoryData?.portfolioImages,
+          packageInfo: profile.categoryData?.packageInfo,
+        },
       });
 
-      if (updated) {
-        setProfile(updated);
+      if (normalized) {
+        setProfile(normalized);
+        saveProviderAccount(normalized);
+
+        // Keep active session synchronized
+        if (session) {
+          setProviderSession({
+            ...session,
+            providerId: normalized.id,
+            businessName: normalized.businessName,
+            fullName: normalized.fullName,
+            category: normalized.category,
+            profileImage: normalized.profileImage || session.profileImage,
+          });
+        }
+
+        // Dispatch profile update events for cross-component live sync
+        window.dispatchEvent(
+          new CustomEvent('eva_ai_provider_profile_updated', { detail: { providerId: normalized.id } })
+        );
+        window.dispatchEvent(new Event('eva_ai_provider_session_updated'));
+        window.dispatchEvent(new Event('storage'));
+
         setIsEditing(false);
-        setSaveSuccess('Profile and craft credentials saved successfully!');
-        setTimeout(() => setSaveSuccess(null), 3000);
+        showToast('Profile and craft credentials saved successfully!', 'success');
       }
+    } catch (err: any) {
+      console.warn('Failed updating provider profile on backend:', err);
+      if (err instanceof ApiError) {
+        if (err.status === 400) {
+          showToast(err.message || 'Validation error: Please verify entered profile fields.', 'error');
+        } else if (err.status === 401) {
+          // Handled by token refresh / auth invalidation
+        } else if (err.status === 403) {
+          showToast('Permission denied: Unable to modify provider profile.', 'error');
+        } else {
+          showToast(err.message || 'Server error updating profile. Please try again.', 'error');
+        }
+      } else {
+        showToast('Network error: Unable to reach server. Please check your connection.', 'error');
+      }
+    } finally {
+      setIsSaving(false);
     }
   };
 
@@ -89,12 +242,21 @@ export const ProviderProfilePage: React.FC = () => {
     }
   };
 
-  const handleSavePhoto = () => {
-    if (!photoPreview || !session?.providerId) return;
+  const handleSavePhoto = async () => {
+    if (!photoPreview || !session?.providerId || isSavingPhoto) return;
     setIsSavingPhoto(true);
 
-    setTimeout(() => {
-      const updated = updateProviderProfile(session.providerId, {
+    try {
+      // Attempt backend update with image string
+      let normalized: ProviderAccount | null = null;
+      try {
+        const res: any = await providersApi.updateProfile({ profileImage: photoPreview });
+        normalized = normalizeBackendProviderProfile(res, profile);
+      } catch (err) {
+        console.warn('Backend image upload endpoint not available or rejected, fallback to local storage:', err);
+      }
+
+      const updated = normalized || updateProviderProfile(session.providerId, {
         profileImage: photoPreview,
       });
 
@@ -102,11 +264,13 @@ export const ProviderProfilePage: React.FC = () => {
         setProfile(updated);
         setPhotoPreview(null);
         setPhotoFileError(null);
-        setSaveSuccess('Profile photo updated successfully!');
-        setTimeout(() => setSaveSuccess(null), 3000);
+        showToast('Profile photo updated successfully!', 'success');
       }
+    } catch (err: any) {
+      showToast(err?.message || 'Failed updating profile photo.', 'error');
+    } finally {
       setIsSavingPhoto(false);
-    }, 300);
+    }
   };
 
   const handleCancelPhoto = () => {
@@ -115,6 +279,22 @@ export const ProviderProfilePage: React.FC = () => {
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
     }
+  };
+
+  const handleCancelEdit = () => {
+    if (profile) {
+      setEditForm({
+        businessName: profile.businessName,
+        fullName: profile.fullName,
+        phone: profile.phone,
+        location: profile.location,
+        description: profile.description,
+        startingPrice: profile.startingPrice,
+        yearsExperience: profile.yearsExperience,
+      });
+      setEditCategoryData(profile.categoryData || {});
+    }
+    setIsEditing(false);
   };
 
   if (!profile) {
@@ -181,10 +361,19 @@ export const ProviderProfilePage: React.FC = () => {
   return (
     <div className="space-y-8 animate-in fade-in duration-300">
       {/* Toast */}
-      {saveSuccess && (
-        <div className="fixed bottom-6 right-6 z-50 p-4 rounded-2xl bg-surface-container-high/95 backdrop-blur-xl border border-secondary/40 shadow-2xl text-secondary text-sm font-semibold flex items-center gap-3 animate-in slide-in-from-bottom duration-200">
-          <Icon name="check_circle" className="text-[20px]" />
-          <span>{saveSuccess}</span>
+      {toastNotice && (
+        <div
+          className={`fixed bottom-6 right-6 z-50 p-4 rounded-2xl bg-surface-container-high/95 backdrop-blur-xl border shadow-2xl text-sm font-semibold flex items-center gap-3 animate-in slide-in-from-bottom duration-200 ${
+            toastNotice.type === 'error'
+              ? 'border-error/40 text-on-error-container bg-error-container/80'
+              : 'border-secondary/40 text-secondary'
+          }`}
+        >
+          <Icon
+            name={toastNotice.type === 'error' ? 'error' : 'check_circle'}
+            className="text-[20px] shrink-0"
+          />
+          <span>{toastNotice.message}</span>
         </div>
       )}
 
@@ -193,7 +382,7 @@ export const ProviderProfilePage: React.FC = () => {
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2 mb-1">
             <span className="px-2.5 py-0.5 rounded-full text-[11px] font-bold uppercase tracking-wider bg-secondary/20 text-secondary border border-secondary/30">
-              Verified Partner Dossier
+              {profile.approvalStatus === 'PENDING' ? 'Pending Approval' : 'Verified Partner Dossier'}
             </span>
             <span className="text-xs text-outline">• ID: {profile.id}</span>
           </div>
@@ -205,12 +394,24 @@ export const ProviderProfilePage: React.FC = () => {
           </p>
         </div>
 
-        <div className="shrink-0">
+        <div className="flex items-center gap-2 shrink-0">
+          <button
+            type="button"
+            onClick={() => loadProfile(false)}
+            disabled={isLoading || isSaving}
+            className="inline-flex items-center gap-1.5 text-xs text-on-surface-variant hover:text-secondary transition-colors py-2 px-3.5 rounded-xl bg-surface-container hover:bg-surface-container-high border border-surface-container-highest/60 disabled:opacity-50"
+            title="Refresh profile from backend"
+          >
+            <Icon name="refresh" className={`text-[16px] ${isLoading ? 'animate-spin' : ''}`} />
+            <span>{isLoading ? 'Syncing...' : 'Sync'}</span>
+          </button>
+
           {isEditing ? (
             <button
               type="button"
-              onClick={() => setIsEditing(false)}
-              className="px-4 py-2.5 rounded-xl bg-surface-container hover:bg-surface-container-high text-on-surface text-xs font-semibold border border-surface-container-highest transition-colors w-full sm:w-auto"
+              disabled={isSaving}
+              onClick={handleCancelEdit}
+              className="px-4 py-2.5 rounded-xl bg-surface-container hover:bg-surface-container-high text-on-surface text-xs font-semibold border border-surface-container-highest transition-colors w-full sm:w-auto disabled:opacity-50"
             >
               Cancel Edit
             </button>
@@ -634,15 +835,26 @@ export const ProviderProfilePage: React.FC = () => {
           <div className="flex items-center gap-3 pt-2">
             <button
               type="submit"
-              className="px-6 py-3.5 rounded-xl bg-secondary hover:bg-secondary-fixed-dim text-on-secondary-fixed font-bold text-xs transition-all shadow-[0_0_20px_rgba(255,178,190,0.3)] flex items-center gap-2"
+              disabled={isSaving}
+              className="px-6 py-3.5 rounded-xl bg-secondary hover:bg-secondary-fixed-dim disabled:opacity-50 text-on-secondary-fixed font-bold text-xs transition-all shadow-[0_0_20px_rgba(255,178,190,0.3)] flex items-center gap-2"
             >
-              <Icon name="check" className="text-[16px]" />
-              <span>Save Changes</span>
+              {isSaving ? (
+                <>
+                  <span className="w-3.5 h-3.5 border-2 border-on-secondary-fixed border-t-transparent rounded-full animate-spin" />
+                  <span>Saving...</span>
+                </>
+              ) : (
+                <>
+                  <Icon name="check" className="text-[16px]" />
+                  <span>Save Changes</span>
+                </>
+              )}
             </button>
             <button
               type="button"
-              onClick={() => setIsEditing(false)}
-              className="px-4 py-3.5 rounded-xl bg-surface-container hover:bg-surface-container-highest text-on-surface text-xs font-semibold border border-surface-container-highest transition-colors"
+              disabled={isSaving}
+              onClick={handleCancelEdit}
+              className="px-4 py-3.5 rounded-xl bg-surface-container hover:bg-surface-container-highest text-on-surface text-xs font-semibold border border-surface-container-highest transition-colors disabled:opacity-50"
             >
               Cancel
             </button>

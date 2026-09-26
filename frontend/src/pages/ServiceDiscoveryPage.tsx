@@ -11,7 +11,8 @@ import { PRICE_RANGES, SERVICE_CATEGORIES } from '../data/mockProviders';
 import { EventPlanData } from '../types/event';
 import { CustomerProfileData } from './CustomerSignupPage';
 import { Provider, SelectedServiceItem, ServiceFilterState } from '../types/service';
-import { isProviderAvailable, getAllDisplayProviders } from '../utils/providerAuth';
+import { isProviderAvailable, getAllDisplayProviders, fetchAndCacheAllProviders } from '../utils/providerAuth';
+import { eventsApi, getStoredAccessToken } from '../api/api';
 
 export const ServiceDiscoveryPage: React.FC = () => {
   // 1. Providers state (merging mock and live registered providers)
@@ -23,6 +24,7 @@ export const ServiceDiscoveryPage: React.FC = () => {
 
   // 3. Selected services state from localStorage key: eva_ai_selected_services
   const [selectedServices, setSelectedServices] = useState<SelectedServiceItem[]>([]);
+  const [isProcessingId, setIsProcessingId] = useState<string | null>(null);
 
   // 4. Toast feedback state
   const [toastMessage, setToastMessage] = useState<string | null>(null);
@@ -37,7 +39,7 @@ export const ServiceDiscoveryPage: React.FC = () => {
     sortBy: 'recommended',
   });
 
-  // Load localStorage on mount
+  // Load localStorage on mount and sync from backend
   useEffect(() => {
     try {
       const eventJson = localStorage.getItem('eva_ai_event');
@@ -66,19 +68,39 @@ export const ServiceDiscoveryPage: React.FC = () => {
       console.warn('Failed to parse eva_ai_selected_services from localStorage:', e);
     }
 
-    // Listen for live availability changes from Provider portal or storage
+    // Authoritative backend fetch on mount
+    fetchAndCacheAllProviders().then((list) => {
+      if (list && list.length > 0) {
+        setAllProviders(list);
+      }
+    });
+
     // Listen for live availability changes, provider profile changes, or storage
     const handleUpdate = () => {
-      setSelectedServices((prev) => [...prev]);
+      try {
+        const selectedJson = localStorage.getItem('eva_ai_selected_services');
+        if (selectedJson) {
+          setSelectedServices(JSON.parse(selectedJson));
+        }
+      } catch {}
       setAllProviders(getAllDisplayProviders());
+      fetchAndCacheAllProviders().then((list) => {
+        if (list && list.length > 0) {
+          setAllProviders(list);
+        }
+      });
     };
 
     window.addEventListener('eva_ai_availability_updated', handleUpdate);
+    window.addEventListener('eva_ai_provider_availability_updated', handleUpdate);
     window.addEventListener('eva_ai_provider_profile_updated', handleUpdate);
+    window.addEventListener('eva_ai_selected_services_updated', handleUpdate);
     window.addEventListener('storage', handleUpdate);
     return () => {
       window.removeEventListener('eva_ai_availability_updated', handleUpdate);
+      window.removeEventListener('eva_ai_provider_availability_updated', handleUpdate);
       window.removeEventListener('eva_ai_provider_profile_updated', handleUpdate);
+      window.removeEventListener('eva_ai_selected_services_updated', handleUpdate);
       window.removeEventListener('storage', handleUpdate);
     };
   }, []);
@@ -88,6 +110,7 @@ export const ServiceDiscoveryPage: React.FC = () => {
     setSelectedServices(items);
     try {
       localStorage.setItem('eva_ai_selected_services', JSON.stringify(items));
+      window.dispatchEvent(new Event('eva_ai_selected_services_updated'));
     } catch (e) {
       console.warn('Failed to save eva_ai_selected_services to localStorage:', e);
     }
@@ -101,8 +124,8 @@ export const ServiceDiscoveryPage: React.FC = () => {
     }, 3500);
   };
 
-  // Handle adding service to event plan
-  const handleAddToEvent = (provider: Provider) => {
+  // Handle adding service to event plan (POST /events/:id/services)
+  const handleAddToEvent = async (provider: Provider) => {
     // Availability check against customer's event date
     if (!isProviderAvailable(provider.id, eventPlan?.eventDate)) {
       showToast(`This provider is unavailable on your event date.`);
@@ -115,23 +138,68 @@ export const ServiceDiscoveryPage: React.FC = () => {
       return;
     }
 
-    const newItem: SelectedServiceItem = {
-      providerId: provider.id,
-      providerName: provider.name,
-      category: provider.category,
-      location: provider.location,
-      startingPrice: provider.startingPrice,
-      selectedAt: new Date().toISOString(),
-      imageUrl: provider.images[0],
-    };
+    if (isProcessingId === provider.id) return;
+    setIsProcessingId(provider.id);
 
-    const updated = [...selectedServices, newItem];
-    saveSelectedServices(updated);
-    showToast(`Added ${provider.name} to your event plan ✓`);
+    try {
+      let backendCartItemId: string | undefined = undefined;
+      const token = getStoredAccessToken();
+
+      if (token && eventPlan?.id) {
+        try {
+          const res = await eventsApi.addService(eventPlan.id, {
+            providerId: provider.id,
+            providerName: provider.name,
+            category: provider.category,
+            location: provider.location,
+            startingPrice: provider.startingPrice,
+            imageUrl: provider.images[0],
+          });
+          backendCartItemId =
+            res?.data?.cartItemId ||
+            res?.data?.id ||
+            res?.data?.serviceId ||
+            (res as any)?.cartItemId ||
+            (res as any)?.id;
+        } catch (apiErr: any) {
+          console.warn('Backend addService warning:', apiErr);
+        }
+      }
+
+      const newItem: SelectedServiceItem = {
+        cartItemId: backendCartItemId,
+        providerId: provider.id,
+        providerName: provider.name,
+        category: provider.category,
+        location: provider.location,
+        startingPrice: provider.startingPrice,
+        selectedAt: new Date().toISOString(),
+        imageUrl: provider.images[0],
+      };
+
+      const updated = [...selectedServices, newItem];
+      saveSelectedServices(updated);
+      showToast(`Added ${provider.name} to your event plan ✓`);
+    } finally {
+      setIsProcessingId(null);
+    }
   };
 
-  // Handle removing service from event plan
-  const handleRemoveService = (providerId: string) => {
+  // Handle removing service from event plan (DELETE /events/:id/services/:serviceId)
+  const handleRemoveService = async (providerId: string) => {
+    const itemToRemove = selectedServices.find((s) => s.providerId === providerId);
+    const token = getStoredAccessToken();
+
+    if (token && eventPlan?.id && itemToRemove) {
+      const serviceIdentifier =
+        itemToRemove.serviceId || itemToRemove.id || itemToRemove.cartItemId || providerId;
+      try {
+        await eventsApi.removeService(eventPlan.id, serviceIdentifier);
+      } catch (apiErr: any) {
+        console.warn('Backend removeService warning:', apiErr);
+      }
+    }
+
     const updated = selectedServices.filter((s) => s.providerId !== providerId);
     saveSelectedServices(updated);
     showToast('Removed service from your event plan.');

@@ -3,7 +3,7 @@ import { Link, useNavigate, useLocation } from 'react-router-dom';
 import Header from '../components/layout/Header';
 import Footer from '../components/layout/Footer';
 import Icon from '../components/common/Icon';
-import { authenticateProvider, getProviderSession } from '../utils/providerAuth';
+import { loginProvider, getProviderSession } from '../utils/providerAuth';
 
 export const ProviderLoginPage: React.FC = () => {
   const navigate = useNavigate();
@@ -28,11 +28,12 @@ export const ProviderLoginPage: React.FC = () => {
   const [forgotPasswordNotice, setForgotPasswordNotice] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMessage('');
 
-    if (!formData.email.trim()) {
+    const cleanEmail = formData.email.trim().toLowerCase();
+    if (!cleanEmail) {
       setErrorMessage('Please enter your business email.');
       return;
     }
@@ -43,8 +44,8 @@ export const ProviderLoginPage: React.FC = () => {
 
     setIsSubmitting(true);
 
-    setTimeout(() => {
-      const result = authenticateProvider(formData.email, formData.password);
+    try {
+      const result = await loginProvider(cleanEmail, formData.password);
       setIsSubmitting(false);
 
       if (result.success) {
@@ -52,7 +53,10 @@ export const ProviderLoginPage: React.FC = () => {
       } else {
         setErrorMessage(result.error || 'Authentication failed. Please check your credentials.');
       }
-    }, 400);
+    } catch (err: any) {
+      setIsSubmitting(false);
+      setErrorMessage(err?.message || 'Authentication failed. Please check your credentials.');
+    }
   };
 
   const handleDemoFill = () => {

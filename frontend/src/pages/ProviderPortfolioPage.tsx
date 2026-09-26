@@ -1,8 +1,15 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useOutletContext } from 'react-router-dom';
 import Icon from '../components/common/Icon';
 import { ProviderAccount, ProviderSession } from '../types/provider';
-import { getProviderProfile, updateProviderProfile, compressImageFile } from '../utils/providerAuth';
+import {
+  getProviderProfile,
+  updateProviderProfile,
+  compressImageFile,
+  normalizePortfolioItems,
+  normalizeServicePackages,
+} from '../utils/providerAuth';
+import { providersApi, servicesApi, ApiError, getStoredAccessToken } from '../api/api';
 
 interface PackageItem {
   id?: string;
@@ -16,49 +23,133 @@ export const ProviderPortfolioPage: React.FC = () => {
   const { session } = useOutletContext<{ session: ProviderSession }>();
   const [profile, setProfile] = useState<ProviderAccount | null>(null);
   const [images, setImages] = useState<string[]>([]);
-  const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [toastNotice, setToastNotice] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
+  const [isLoading, setIsLoading] = useState<boolean>(false);
 
   // Work Gallery Local File Upload State
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [selectedUploads, setSelectedUploads] = useState<string[]>([]);
   const [uploadError, setUploadError] = useState<string | null>(null);
-  const [showUploadModal, setShowUploadModal] = useState(false);
+  const [showUploadModal, setShowUploadModal] = useState<boolean>(false);
+  const [isUploadingPhotos, setIsUploadingPhotos] = useState<boolean>(false);
+  const [deletingImageIndex, setDeletingImageIndex] = useState<number | null>(null);
 
   // Packages State
   const [packages, setPackages] = useState<PackageItem[]>([]);
   const [editingPackage, setEditingPackage] = useState<PackageItem | null>(null);
-  const [isNewPackage, setIsNewPackage] = useState(false);
+  const [isNewPackage, setIsNewPackage] = useState<boolean>(false);
   const [packageError, setPackageError] = useState<string | null>(null);
-  const [packageFeatureInput, setPackageFeatureInput] = useState('');
+  const [packageFeatureInput, setPackageFeatureInput] = useState<string>('');
+  const [isSavingPackage, setIsSavingPackage] = useState<boolean>(false);
+  const [deletingPackageId, setDeletingPackageId] = useState<string | null>(null);
 
-  useEffect(() => {
-    if (session?.providerId) {
-      const data = getProviderProfile(session.providerId);
-      setProfile(data);
-      if (data?.categoryData?.portfolioImages) {
-        setImages(data.categoryData.portfolioImages);
-      }
-      if (data?.categoryData?.packageInfo && data.categoryData.packageInfo.length > 0) {
-        const sanitized = data.categoryData.packageInfo.map((p, idx) => ({
-          ...p,
-          id: p.id || `pkg-${session.providerId}-${idx + 1}-${Math.random().toString(36).substring(2, 6)}`,
-        }));
-        setPackages(sanitized);
-      } else {
-        // Initial package if none
-        const initialPkg: PackageItem[] = [
-          {
-            id: `pkg-${session.providerId}-1`,
-            name: 'Essential Atelier Tier',
-            price: Number(data?.startingPrice) || 35000,
-            description: 'Core professional celebration coverage with dedicated crew and master output delivery.',
-            features: ['Full day coverage', 'Color-graded digital deliverable', 'Consultation & Planning'],
-          },
-        ];
-        setPackages(initialPkg);
+  const showToast = (message: string, type: 'success' | 'error' = 'success', duration = 3500) => {
+    setToastNotice({ message, type });
+    setTimeout(() => {
+      setToastNotice((prev) => (prev?.message === message ? null : prev));
+    }, duration);
+  };
+
+  const loadData = useCallback(async (silent = false) => {
+    const providerId = session?.providerId;
+    if (!providerId) return;
+
+    // 1. Initial fast local cache read for layout responsiveness
+    const cached = getProviderProfile(providerId);
+    setProfile(cached);
+
+    let initialImages: string[] = cached?.categoryData?.portfolioImages || [];
+    let initialPackages: PackageItem[] = cached?.categoryData?.packageInfo || [];
+
+    if (initialPackages.length === 0) {
+      initialPackages = [
+        {
+          id: `pkg-${providerId}-1`,
+          name: 'Essential Atelier Tier',
+          price: Number(cached?.startingPrice) || 35000,
+          description: 'Core professional celebration coverage with dedicated crew and master output delivery.',
+          features: ['Full day coverage', 'Color-graded digital deliverable', 'Consultation & Planning'],
+        },
+      ];
+    }
+
+    setImages(initialImages);
+    setPackages(initialPackages);
+
+    // 2. Fetch authoritative portfolio and packages from backend API
+    const token = getStoredAccessToken();
+    if (token) {
+      try {
+        if (!silent) setIsLoading(true);
+
+        // Fetch portfolio items from GET /providers/portfolio
+        let backendImages = initialImages;
+        try {
+          const portfolioRes: any = await providersApi.getPortfolio();
+          backendImages = normalizePortfolioItems(portfolioRes, initialImages);
+        } catch (err) {
+          console.warn('Backend portfolio GET returned error, using cached images:', err);
+        }
+
+        // Fetch services / packages from GET /services/my
+        let backendPackages = initialPackages;
+        try {
+          const servicesRes: any = await servicesApi.getMyServices();
+          const normalized = normalizeServicePackages(servicesRes, initialPackages);
+          if (normalized.length > 0) {
+            backendPackages = normalized;
+          }
+        } catch (err) {
+          console.warn('Backend services GET returned error, using cached packages:', err);
+        }
+
+        // Update state and local cache
+        setImages(backendImages);
+        setPackages(backendPackages);
+
+        const current = getProviderProfile(providerId);
+        const currentCatData = current?.categoryData || {};
+        const updatedCatData = {
+          ...currentCatData,
+          portfolioImages: backendImages,
+          packageInfo: backendPackages,
+        };
+        const updatedProfile = updateProviderProfile(providerId, { categoryData: updatedCatData });
+        if (updatedProfile) {
+          setProfile(updatedProfile);
+        }
+      } catch (err: any) {
+        console.warn('Failed fetching authoritative portfolio from backend:', err);
+        if (err instanceof ApiError) {
+          if (err.status === 401) {
+            // Handled by centralized auth
+          } else if (err.status === 403) {
+            showToast('Account access restricted.', 'error');
+          }
+        }
+      } finally {
+        if (!silent) setIsLoading(false);
       }
     }
   }, [session?.providerId]);
+
+  useEffect(() => {
+    loadData(false);
+
+    const handleSync = () => {
+      loadData(true);
+    };
+
+    window.addEventListener('eva_ai_provider_session_updated', handleSync);
+    window.addEventListener('eva_ai_provider_profile_updated', handleSync);
+    window.addEventListener('storage', handleSync);
+
+    return () => {
+      window.removeEventListener('eva_ai_provider_session_updated', handleSync);
+      window.removeEventListener('eva_ai_provider_profile_updated', handleSync);
+      window.removeEventListener('storage', handleSync);
+    };
+  }, [loadData]);
 
   // Gallery: Local File Picker (Multiple) with client-side compression
   const handleFilesSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -99,50 +190,87 @@ export const ProviderPortfolioPage: React.FC = () => {
     setSelectedUploads((prev) => prev.filter((_, i) => i !== index));
   };
 
-  const handleSaveUploads = () => {
-    if (selectedUploads.length === 0 || !session?.providerId) return;
+  const handleSaveUploads = async () => {
+    const providerId = session?.providerId;
+    if (selectedUploads.length === 0 || !providerId || isUploadingPhotos) return;
 
-    // Fetch freshest current profile from storage to prevent race conditions
-    const current = getProviderProfile(session.providerId);
-    const currentImages = current?.categoryData?.portfolioImages || images;
-    // Append to existing images, do not replace!
-    const updatedImages = [...currentImages, ...selectedUploads];
+    setIsUploadingPhotos(true);
 
-    const currentCatData = current?.categoryData || {};
-    const updatedCatData = { ...currentCatData, portfolioImages: updatedImages };
-    const updated = updateProviderProfile(session.providerId, { categoryData: updatedCatData });
+    try {
+      // 1. Send each added image or batch to POST /providers/portfolio
+      for (const imgUrl of selectedUploads) {
+        try {
+          await providersApi.addPortfolio({
+            imageUrl: imgUrl,
+            image: imgUrl,
+            title: `Portfolio piece ${Date.now()}`,
+          });
+        } catch (err) {
+          console.warn('Backend addPortfolio call error (fallback to local cache):', err);
+        }
+      }
 
-    if (updated) {
-      setProfile(updated);
-      setImages(updatedImages);
+      // 2. Update local state and local storage cache
+      const current = getProviderProfile(providerId);
+      const currentImages = current?.categoryData?.portfolioImages || images;
+      const updatedImages = [...currentImages, ...selectedUploads];
+
+      const currentCatData = current?.categoryData || {};
+      const updatedCatData = { ...currentCatData, portfolioImages: updatedImages };
+      const updated = updateProviderProfile(providerId, { categoryData: updatedCatData });
+
+      if (updated) {
+        setProfile(updated);
+        setImages(updatedImages);
+      }
+
+      setSelectedUploads([]);
+      setShowUploadModal(false);
+      setUploadError(null);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+
+      showToast(`Added ${selectedUploads.length} new work image(s) to gallery!`, 'success');
+    } catch (err: any) {
+      showToast(err?.message || 'Failed adding images to portfolio.', 'error');
+    } finally {
+      setIsUploadingPhotos(false);
     }
-
-    setSelectedUploads([]);
-    setShowUploadModal(false);
-    setUploadError(null);
-    if (fileInputRef.current) fileInputRef.current.value = '';
-
-    setToastMessage(`Added ${selectedUploads.length} new work image(s) to gallery!`);
-    setTimeout(() => setToastMessage(null), 3000);
   };
 
-  const handleRemoveExistingImage = (indexToRemove: number) => {
-    if (!session?.providerId) return;
-    const current = getProviderProfile(session.providerId);
-    const currentImages = current?.categoryData?.portfolioImages || images;
-    const updatedImages = currentImages.filter((_, idx) => idx !== indexToRemove);
+  const handleRemoveExistingImage = async (indexToRemove: number) => {
+    const providerId = session?.providerId;
+    if (!providerId || deletingImageIndex !== null) return;
 
-    const currentCatData = current?.categoryData || {};
-    const updatedCatData = { ...currentCatData, portfolioImages: updatedImages };
-    const updated = updateProviderProfile(session.providerId, { categoryData: updatedCatData });
+    setDeletingImageIndex(indexToRemove);
 
-    if (updated) {
-      setProfile(updated);
-      setImages(updatedImages);
+    try {
+      // 1. Attempt DELETE /providers/portfolio/:id if applicable
+      try {
+        await providersApi.deletePortfolio(String(indexToRemove));
+      } catch (err) {
+        console.warn('Backend deletePortfolio returned error, syncing locally:', err);
+      }
+
+      // 2. Update local state and storage cache
+      const current = getProviderProfile(providerId);
+      const currentImages = current?.categoryData?.portfolioImages || images;
+      const updatedImages = currentImages.filter((_, idx) => idx !== indexToRemove);
+
+      const currentCatData = current?.categoryData || {};
+      const updatedCatData = { ...currentCatData, portfolioImages: updatedImages };
+      const updated = updateProviderProfile(providerId, { categoryData: updatedCatData });
+
+      if (updated) {
+        setProfile(updated);
+        setImages(updatedImages);
+      }
+
+      showToast('Image removed from portfolio gallery.', 'success');
+    } catch (err: any) {
+      showToast(err?.message || 'Failed removing image from gallery.', 'error');
+    } finally {
+      setDeletingImageIndex(null);
     }
-
-    setToastMessage('Image removed from portfolio gallery.');
-    setTimeout(() => setToastMessage(null), 3000);
   };
 
   // Package Management
@@ -183,9 +311,10 @@ export const ProviderPortfolioPage: React.FC = () => {
     });
   };
 
-  const handleSavePackage = (e: React.FormEvent) => {
+  const handleSavePackage = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!editingPackage || !session?.providerId) return;
+    const providerId = session?.providerId;
+    if (!editingPackage || !providerId || isSavingPackage) return;
 
     if (!editingPackage.name.trim()) {
       setPackageError('Package Name is required.');
@@ -209,55 +338,110 @@ export const ProviderPortfolioPage: React.FC = () => {
       return;
     }
 
-    let updatedList: PackageItem[] = [];
-    if (isNewPackage) {
-      updatedList = [...packages, editingPackage];
-    } else {
-      updatedList = packages.map((p) => (p.id === editingPackage.id ? editingPackage : p));
+    setIsSavingPackage(true);
+
+    try {
+      // 1. Sync with backend services API if applicable
+      try {
+        if (isNewPackage) {
+          await servicesApi.create({
+            name: editingPackage.name,
+            price: editingPackage.price,
+            description: editingPackage.description,
+            features: editingPackage.features,
+          });
+        } else if (editingPackage.id) {
+          await servicesApi.update(editingPackage.id, {
+            name: editingPackage.name,
+            price: editingPackage.price,
+            description: editingPackage.description,
+            features: editingPackage.features,
+          });
+        }
+      } catch (err) {
+        console.warn('Backend services mutation call error (fallback to local cache):', err);
+      }
+
+      // 2. Update local state and storage cache
+      let updatedList: PackageItem[] = [];
+      if (isNewPackage) {
+        updatedList = [...packages, editingPackage];
+      } else {
+        updatedList = packages.map((p) => (p.id === editingPackage.id ? editingPackage : p));
+      }
+
+      const current = getProviderProfile(providerId);
+      const currentCatData = current?.categoryData || {};
+      const updatedCatData = { ...currentCatData, packageInfo: updatedList };
+      const updated = updateProviderProfile(providerId, { categoryData: updatedCatData });
+
+      if (updated) {
+        setProfile(updated);
+        setPackages(updatedList);
+      }
+
+      setEditingPackage(null);
+      setPackageError(null);
+      showToast(`Package "${editingPackage.name}" saved successfully!`, 'success');
+    } catch (err: any) {
+      showToast(err?.message || 'Failed saving package tier.', 'error');
+    } finally {
+      setIsSavingPackage(false);
     }
-
-    const current = getProviderProfile(session.providerId);
-    const currentCatData = current?.categoryData || {};
-    const updatedCatData = { ...currentCatData, packageInfo: updatedList };
-    const updated = updateProviderProfile(session.providerId, { categoryData: updatedCatData });
-
-    if (updated) {
-      setProfile(updated);
-      setPackages(updatedList);
-    }
-
-    setEditingPackage(null);
-    setPackageError(null);
-    setToastMessage(`Package "${editingPackage.name}" saved successfully!`);
-    setTimeout(() => setToastMessage(null), 3000);
   };
 
-  const handleDeletePackage = (pkgId?: string) => {
-    if (!pkgId || !session?.providerId) return;
-    const current = getProviderProfile(session.providerId);
-    const currentPackages = current?.categoryData?.packageInfo || packages;
-    const updatedList = currentPackages.filter((p) => p.id !== pkgId);
+  const handleDeletePackage = async (pkgId?: string) => {
+    const providerId = session?.providerId;
+    if (!pkgId || !providerId || deletingPackageId !== null) return;
 
-    const currentCatData = current?.categoryData || {};
-    const updatedCatData = { ...currentCatData, packageInfo: updatedList };
-    const updated = updateProviderProfile(session.providerId, { categoryData: updatedCatData });
+    setDeletingPackageId(pkgId);
 
-    if (updated) {
-      setProfile(updated);
-      setPackages(updatedList);
+    try {
+      // 1. Attempt backend service delete if applicable
+      try {
+        await servicesApi.delete(pkgId);
+      } catch (err) {
+        console.warn('Backend service delete returned error, syncing locally:', err);
+      }
+
+      // 2. Update local state and storage cache
+      const current = getProviderProfile(providerId);
+      const currentPackages = current?.categoryData?.packageInfo || packages;
+      const updatedList = currentPackages.filter((p) => p.id !== pkgId);
+
+      const currentCatData = current?.categoryData || {};
+      const updatedCatData = { ...currentCatData, packageInfo: updatedList };
+      const updated = updateProviderProfile(providerId, { categoryData: updatedCatData });
+
+      if (updated) {
+        setProfile(updated);
+        setPackages(updatedList);
+      }
+
+      showToast('Package tier deleted.', 'success');
+    } catch (err: any) {
+      showToast(err?.message || 'Failed deleting package tier.', 'error');
+    } finally {
+      setDeletingPackageId(null);
     }
-
-    setToastMessage('Package tier deleted.');
-    setTimeout(() => setToastMessage(null), 3000);
   };
 
   return (
     <div className="space-y-10 animate-in fade-in duration-300">
       {/* Toast Notification */}
-      {toastMessage && (
-        <div className="fixed bottom-6 right-6 z-50 p-4 rounded-2xl bg-surface-container-high/95 backdrop-blur-xl border border-secondary/40 shadow-2xl text-secondary text-sm font-semibold flex items-center gap-3 animate-in slide-in-from-bottom duration-200">
-          <Icon name="check_circle" className="text-[20px]" />
-          <span>{toastMessage}</span>
+      {toastNotice && (
+        <div
+          className={`fixed bottom-6 right-6 z-50 p-4 rounded-2xl bg-surface-container-high/95 backdrop-blur-xl border shadow-2xl text-sm font-semibold flex items-center gap-3 animate-in slide-in-from-bottom duration-200 ${
+            toastNotice.type === 'error'
+              ? 'border-error/40 text-on-error-container bg-error-container/80'
+              : 'border-secondary/40 text-secondary'
+          }`}
+        >
+          <Icon
+            name={toastNotice.type === 'error' ? 'error' : 'check_circle'}
+            className="text-[20px] shrink-0"
+          />
+          <span>{toastNotice.message}</span>
         </div>
       )}
 
@@ -288,11 +472,23 @@ export const ProviderPortfolioPage: React.FC = () => {
           className="hidden"
         />
 
-        <div className="flex items-center gap-3 shrink-0">
+        <div className="flex items-center gap-2 shrink-0">
+          <button
+            type="button"
+            onClick={() => loadData(false)}
+            disabled={isLoading || isUploadingPhotos || isSavingPackage}
+            className="inline-flex items-center gap-1.5 text-xs text-on-surface-variant hover:text-secondary transition-colors py-2.5 px-3.5 rounded-xl bg-surface-container hover:bg-surface-container-high border border-surface-container-highest/60 disabled:opacity-50"
+            title="Refresh portfolio and packages from backend"
+          >
+            <Icon name="refresh" className={`text-[16px] ${isLoading ? 'animate-spin' : ''}`} />
+            <span>{isLoading ? 'Syncing...' : 'Sync'}</span>
+          </button>
+
           <button
             type="button"
             onClick={() => fileInputRef.current?.click()}
-            className="px-5 py-2.5 rounded-xl bg-secondary hover:bg-secondary-fixed-dim text-on-secondary-fixed text-xs font-bold transition-all shadow-[0_0_15px_rgba(255,178,190,0.25)] flex items-center justify-center gap-2 w-full sm:w-auto"
+            disabled={isUploadingPhotos}
+            className="px-5 py-2.5 rounded-xl bg-secondary hover:bg-secondary-fixed-dim text-on-secondary-fixed text-xs font-bold transition-all shadow-[0_0_15px_rgba(255,178,190,0.25)] flex items-center justify-center gap-2 w-full sm:w-auto disabled:opacity-50"
           >
             <Icon name="add_photo_alternate" className="text-[16px]" />
             <span>Add Photos</span>
