@@ -1,0 +1,26 @@
+{
+  "name": "eva-ai-backend",
+  "version": "1.0.0",
+  "description": "Backend service for Eva-Ai Event Management and Wedding Planning platform",
+  "main": "src/app.js",
+  "type": "module",
+  "scripts": {
+    "start": "node src/app.js",
+    "dev": "node --watch src/app.js"
+  },
+  "keywords": [
+    "eva-ai",
+    "event-management",
+    "wedding-planner",
+    "express"
+  ],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@supabase/supabase-js": "^2.117.1",
+    "cors": "^2.8.6",
+    "dotenv": "^18.0.3",
+    "express": "^5.2.1",
+    "multer": "^2.4.0"
+  }
+}
