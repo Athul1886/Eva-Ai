@@ -68,7 +68,9 @@ export const ProviderPortfolioPage: React.FC = () => {
     if (!hasAuthToken()) return;
     try {
       const res = await apiClient.get('/providers/portfolio');
-      const rawList = res.portfolios || res.portfolio;
+      console.log('[ProviderPortfolioPage] Fetched portfolio:', res);
+      
+      const rawList = res.portfolios || res.portfolio || [];
       if (res.success && Array.isArray(rawList)) {
         const items: PortfolioItem[] = rawList.map((item: any) => ({
           id: item.id,
@@ -79,9 +81,13 @@ export const ProviderPortfolioPage: React.FC = () => {
           displayOrder: item.displayOrder ?? item.display_order ?? 0,
           createdAt: item.createdAt || item.created_at,
         }));
+        
+        console.log('[ProviderPortfolioPage] Mapped items:', items);
         setPortfolios(items);
         const liveImages = items.map((m) => m.imageUrl).filter(Boolean);
         setImages(liveImages);
+        
+        // Sync local profile for immediate local access (though backend remains truth)
         setProfile((prev) => {
           if (!prev) return null;
           return {
@@ -92,9 +98,11 @@ export const ProviderPortfolioPage: React.FC = () => {
             },
           };
         });
+      } else {
+        console.warn('[ProviderPortfolioPage] Invalid portfolio response:', res);
       }
     } catch (err) {
-      console.warn('[ProviderPortfolioPage] Failed fetching portfolio from backend:', err);
+      console.error('[ProviderPortfolioPage] Failed fetching portfolio from backend:', err);
     }
   };
 
@@ -102,9 +110,6 @@ export const ProviderPortfolioPage: React.FC = () => {
     if (session?.providerId) {
       const data = getProviderProfile(session.providerId);
       setProfile(data);
-      if (data?.categoryData?.portfolioImages) {
-        setImages(data.categoryData.portfolioImages);
-      }
       if (data?.categoryData?.packageInfo && data.categoryData.packageInfo.length > 0) {
         const sanitized = data.categoryData.packageInfo.map((p, idx) => ({
           ...p,

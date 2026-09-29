@@ -331,7 +331,7 @@ export const getPublicProviderById = async (providerId, requestingUser = null) =
   const { data: provider, error } = await dbClient
     .from('provider_profiles')
     .select('*, primary_category:categories(*), user:users!user_id(id, full_name, avatar_url)')
-    .eq('id', providerId)
+    .or(`id.eq.${providerId},user_id.eq.${providerId}`)
     .maybeSingle();
 
   if (error || !provider) {
@@ -364,7 +364,8 @@ export const getPublicProviderById = async (providerId, requestingUser = null) =
     .from('provider_portfolios')
     .select('id, image_url, title, caption, is_featured, display_order, created_at')
     .eq('provider_id', provider.id)
-    .order('display_order', { ascending: true });
+    .order('display_order', { ascending: true })
+    .order('created_at', { ascending: false });
 
   // Fetch blackout dates
   const { data: availabilities } = await dbClient
@@ -386,11 +387,18 @@ export const getProviderPortfolioPublic = async (providerId) => {
   const anonClient = getSupabaseClient();
   const dbClient = adminClient || anonClient;
 
-  // Verify provider exists and is approved
+  const isUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(providerId);
+  if (!isUUID) {
+    const error = new Error('Invalid provider ID format');
+    error.statusCode = 400;
+    throw error;
+  }
+
+  // Verify provider exists and is approved, resolving by either provider_profiles.id or user_id
   const { data: provider } = await dbClient
     .from('provider_profiles')
     .select('id, approval_status')
-    .eq('id', providerId)
+    .or(`id.eq.${providerId},user_id.eq.${providerId}`)
     .maybeSingle();
 
   if (!provider || provider.approval_status !== 'approved') {
@@ -402,8 +410,9 @@ export const getProviderPortfolioPublic = async (providerId) => {
   const { data: portfolios, error } = await dbClient
     .from('provider_portfolios')
     .select('*')
-    .eq('provider_id', providerId)
-    .order('display_order', { ascending: true });
+    .eq('provider_id', provider.id)
+    .order('display_order', { ascending: true })
+    .order('created_at', { ascending: false });
 
   if (error) {
     const err = new Error('Failed to retrieve portfolio: ' + error.message);
@@ -422,10 +431,17 @@ export const getProviderAvailabilityPublic = async (providerId, { startDate, end
   const anonClient = getSupabaseClient();
   const dbClient = adminClient || anonClient;
 
+  const isUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(providerId);
+  if (!isUUID) {
+    const error = new Error('Invalid provider ID format');
+    error.statusCode = 400;
+    throw error;
+  }
+
   const { data: provider } = await dbClient
     .from('provider_profiles')
     .select('id, approval_status')
-    .eq('id', providerId)
+    .or(`id.eq.${providerId},user_id.eq.${providerId}`)
     .maybeSingle();
 
   if (!provider || provider.approval_status !== 'approved') {
@@ -437,7 +453,7 @@ export const getProviderAvailabilityPublic = async (providerId, { startDate, end
   let query = dbClient
     .from('provider_availability')
     .select('id, date, start_time, end_time, is_available, reason')
-    .eq('provider_id', providerId);
+    .eq('provider_id', provider.id);
 
   if (startDate) {
     query = query.gte('date', startDate);

@@ -6,10 +6,28 @@
 export const ACCESS_TOKEN_KEY = 'eva_ai_access_token';
 export const REFRESH_TOKEN_KEY = 'eva_ai_refresh_token';
 
-// Base URL configured from Vite environment variable with safe fallback
-export const API_BASE_URL = (
-  import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000/api'
-).replace(/\/+$/, '');
+// Base URL configured with intelligent resolution:
+// If running in browser on localhost/127.0.0.1, connect directly to local backend port 5000.
+// Otherwise, use Vite environment variable with safe fallback.
+export const getApiBaseUrl = (): string => {
+  if (typeof window !== 'undefined') {
+    const host = window.location.hostname;
+    if (
+      host === 'localhost' ||
+      host === '127.0.0.1' ||
+      host.startsWith('192.168.') ||
+      host.startsWith('10.') ||
+      /^172\.(1[6-9]|2\d|3[0-1])\./.test(host)
+    ) {
+      return `http://${host}:5000/api`;
+    }
+  }
+  return (
+    import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000/api'
+  ).replace(/\/+$/, '');
+};
+
+export const API_BASE_URL = getApiBaseUrl();
 
 export interface ApiTokens {
   accessToken: string;
@@ -116,7 +134,7 @@ export async function apiRequest<T = any>(
 
   // Build clean URL
   const normalizedEndpoint = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
-  const url = `${API_BASE_URL}${normalizedEndpoint}`;
+  const url = `${getApiBaseUrl()}${normalizedEndpoint}`;
 
   const headers = new Headers(customHeaders || {});
 
@@ -133,9 +151,18 @@ export async function apiRequest<T = any>(
     }
   }
 
+  // Enforce fresh network fetch (prevent stale browser or intermediary caching)
+  if (!headers.has('Cache-Control')) {
+    headers.set('Cache-Control', 'no-cache, no-store, must-revalidate');
+  }
+  if (!headers.has('Pragma')) {
+    headers.set('Pragma', 'no-cache');
+  }
+
   let response: Response;
   try {
     response = await fetch(url, {
+      cache: 'no-store',
       ...restOptions,
       headers,
     });
@@ -176,7 +203,7 @@ export async function apiRequest<T = any>(
         if (!isRefreshing) {
           isRefreshing = true;
           try {
-            const refreshRes = await fetch(`${API_BASE_URL}/auth/refresh`, {
+            const refreshRes = await fetch(`${getApiBaseUrl()}/auth/refresh`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ refreshToken }),

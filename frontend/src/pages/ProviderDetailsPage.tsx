@@ -5,7 +5,7 @@ import { Provider, SelectedServiceItem } from '../types/service';
 import { ProviderAccount } from '../types/provider';
 import { EventPlanData, formatIndianRupees, isUUID } from '../types/event';
 import { Booking } from '../types/booking';
-import { isProviderAvailable, getDisplayProvider, saveProviderAvailability } from '../utils/providerAuth';
+import { isProviderAvailable, saveProviderAvailability } from '../utils/providerAuth';
 import { apiClient } from '../utils/api';
 
 export const ProviderDetailsPage: React.FC = () => {
@@ -27,7 +27,7 @@ export const ProviderDetailsPage: React.FC = () => {
     const reloadProvider = () => {
       if (!providerId) return;
 
-      // 1. Fetch from backend API
+      // 1. Fetch strictly from backend API (PostgreSQL + Supabase Storage truth)
       apiClient
         .get(`/providers/${providerId}`, { requiresAuth: false })
         .then((res: any) => {
@@ -54,22 +54,13 @@ export const ProviderDetailsPage: React.FC = () => {
               });
             }
           } else {
-            const disp = getDisplayProvider(providerId);
-            if (disp) {
-              setProvider(disp.provider);
-              setAccount(disp.account);
-            }
-          }
-        })
-        .catch(() => {
-          const disp = getDisplayProvider(providerId);
-          if (disp) {
-            setProvider(disp.provider);
-            setAccount(disp.account);
-          } else {
             setProvider(null);
             setAccount(null);
           }
+        })
+        .catch(() => {
+          setProvider(null);
+          setAccount(null);
         })
         .finally(() => {
           setIsLoading(false);
@@ -313,14 +304,21 @@ export const ProviderDetailsPage: React.FC = () => {
             <div className="lg:col-span-7 space-y-4">
               {/* Main Feature Image */}
               <div className="relative h-[340px] sm:h-[460px] w-full rounded-3xl overflow-hidden bg-surface-container border border-surface-container-highest/60 shadow-2xl">
-                {(() => { console.log('[CUSTOMER IMAGE]', provider.images[activeImageIndex] || provider.images[0]); return null; })()}
-                <img
-                  src={provider.images[activeImageIndex] || provider.images[0]}
-                  alt={`${provider.name} portfolio preview`}
-                  className="w-full h-full object-cover object-center transition-all duration-500"
-                  onLoad={() => console.log('IMAGE LOADED', provider.images[activeImageIndex] || provider.images[0])}
-                  onError={(e) => console.error('IMAGE FAILED', provider.images[activeImageIndex] || provider.images[0], e)}
-                />
+                {provider.images && provider.images.length > 0 ? (
+                  <img
+                    src={provider.images[activeImageIndex] || provider.images[0]}
+                    alt={`${provider.name} portfolio preview`}
+                    className="w-full h-full object-cover object-center transition-all duration-500"
+                  />
+                ) : (
+                  <div className="w-full h-full flex flex-col items-center justify-center text-center p-8 text-on-surface-variant bg-surface-container-high/40">
+                    <Icon name="photo_camera" className="text-5xl text-primary/40 mb-3" />
+                    <span className="text-base font-bold text-on-surface">No Portfolio Published Yet</span>
+                    <span className="text-xs text-on-surface-variant/80 mt-1 max-w-xs">
+                      This verified provider has not uploaded public portfolio pieces yet.
+                    </span>
+                  </div>
+                )}
 
                 <div className="absolute inset-0 bg-gradient-to-t from-surface-container-high/90 via-transparent to-transparent pointer-events-none" />
 
@@ -347,7 +345,7 @@ export const ProviderDetailsPage: React.FC = () => {
               </div>
 
               {/* Thumbnail Selector */}
-              {provider.images.length > 1 && (
+              {provider.images && provider.images.length > 1 && (
                 <div className="flex items-center gap-3 overflow-x-auto pb-2">
                   {provider.images.map((img, idx) => (
                     <button
@@ -624,7 +622,7 @@ export const ProviderDetailsPage: React.FC = () => {
                       ? provider.portfolios
                       : provider.images.map((img, idx) => ({ id: `img-${idx}`, imageUrl: img, title: `Work Sample ${idx + 1}` }))
                     ).map((item: any, idx: number) => {
-                      const imgUrl = item.imageUrl || item.image_url;
+                      const imgUrl = item.imageUrl || item.image_url || item.url || item.image || (item.portfolio && item.portfolio.image_url);
                       if (!imgUrl) return null;
                       return (
                         <div

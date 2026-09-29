@@ -77,18 +77,10 @@ export const formatPublicProviderDTO = (
   }
 
   // Format portfolio images
+  // Format portfolio images strictly from provider_portfolios (NO Unsplash or mock fallbacks)
   const portfolioImageUrls = (portfolios || [])
     .map((p) => p.image_url || p.imageUrl || p.url)
     .filter(Boolean);
-
-  // If no portfolio images uploaded yet, fallback to avatar or category default
-  if (portfolioImageUrls.length === 0) {
-    if (provider.user?.avatar_url) {
-      portfolioImageUrls.push(provider.user.avatar_url);
-    } else {
-      portfolioImageUrls.push(getDefaultCategoryImage(categorySlug));
-    }
-  }
 
   const formattedPortfolios = (portfolios || []).map(formatPortfolioItemDTO);
 

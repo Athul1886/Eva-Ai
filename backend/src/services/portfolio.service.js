@@ -241,13 +241,19 @@ export const deletePortfolioItem = async (portfolioId, userId) => {
     throw forbiddenError;
   }
 
-  const { error: deleteError } = await dbClient
+  const { error: deleteError, count } = await dbClient
     .from('provider_portfolios')
-    .delete()
+    .delete({ count: 'exact' })
     .eq('id', portfolioId);
 
   if (deleteError) {
     const error = new Error('Failed to delete portfolio item: ' + deleteError.message);
+    error.statusCode = 500;
+    throw error;
+  }
+  
+  if (count === 0) {
+    const error = new Error('Failed to delete portfolio item: Record not found or RLS policy blocked deletion.');
     error.statusCode = 500;
     throw error;
   }
