@@ -18,16 +18,18 @@ export const ContactProviderCard: React.FC<ContactProviderCardProps> = ({
 }) => {
   const [copied, setCopied] = useState<boolean>(false);
 
+  const hasPhone = Boolean(contactDemo.phone && contactDemo.phone.trim() !== '');
+  const hasEmail = Boolean(contactDemo.email && contactDemo.email.trim() !== '');
+  const cleanPhone = (contactDemo.phone || '').replace(/[^0-9+]/g, '');
+
   const handleCopyPhone = () => {
-    if (contactDemo.phone) {
+    if (hasPhone) {
       navigator.clipboard.writeText(contactDemo.phone).then(() => {
         setCopied(true);
         setTimeout(() => setCopied(false), 2500);
       });
     }
   };
-
-  const cleanPhone = contactDemo.phone.replace(/[^0-9+]/g, '');
 
   return (
     <div className="rounded-2xl bg-surface-container-low/90 border border-primary/30 p-4 sm:p-5 space-y-3 shadow-lg">
@@ -58,35 +60,43 @@ export const ContactProviderCard: React.FC<ContactProviderCardProps> = ({
             <span className="text-[10px] uppercase text-on-surface-variant font-medium block">
               📞 Phone Number
             </span>
-            <div className="text-primary font-bold text-xs sm:text-sm truncate">
-              {contactDemo.phone}
+            {hasPhone ? (
+              <div className="text-primary font-bold text-xs sm:text-sm truncate">
+                {contactDemo.phone}
+              </div>
+            ) : (
+              <div className="text-on-surface-variant italic text-xs truncate">
+                Phone not provided
+              </div>
+            )}
+          </div>
+
+          {hasPhone && (
+            <div className="flex items-center gap-1.5 flex-shrink-0">
+              <a
+                href={`tel:${cleanPhone}`}
+                className="p-1.5 rounded-lg bg-primary/20 text-primary hover:bg-primary hover:text-on-primary transition-colors text-[11px] font-semibold flex items-center gap-1"
+                title={`Call ${providerName}`}
+              >
+                <Icon name="call" className="text-[14px]" />
+                <span className="hidden sm:inline">Call</span>
+              </a>
+
+              <button
+                type="button"
+                onClick={handleCopyPhone}
+                className={`p-1.5 rounded-lg transition-colors text-[11px] font-semibold flex items-center gap-1 ${
+                  copied
+                    ? 'bg-emerald-500/20 text-emerald-400'
+                    : 'bg-surface-container-high hover:bg-surface-bright text-on-surface-variant hover:text-on-surface'
+                }`}
+                title="Copy phone number"
+              >
+                <Icon name={copied ? 'done' : 'content_copy'} className="text-[14px]" />
+                <span>{copied ? 'Copied' : 'Copy'}</span>
+              </button>
             </div>
-          </div>
-
-          <div className="flex items-center gap-1.5 flex-shrink-0">
-            <a
-              href={`tel:${cleanPhone}`}
-              className="p-1.5 rounded-lg bg-primary/20 text-primary hover:bg-primary hover:text-on-primary transition-colors text-[11px] font-semibold flex items-center gap-1"
-              title={`Call ${providerName}`}
-            >
-              <Icon name="call" className="text-[14px]" />
-              <span className="hidden sm:inline">Call</span>
-            </a>
-
-            <button
-              type="button"
-              onClick={handleCopyPhone}
-              className={`p-1.5 rounded-lg transition-colors text-[11px] font-semibold flex items-center gap-1 ${
-                copied
-                  ? 'bg-emerald-500/20 text-emerald-400'
-                  : 'bg-surface-container-high hover:bg-surface-bright text-on-surface-variant hover:text-on-surface'
-              }`}
-              title="Copy phone number"
-            >
-              <Icon name={copied ? 'done' : 'content_copy'} className="text-[14px]" />
-              <span>{copied ? 'Copied' : 'Copy'}</span>
-            </button>
-          </div>
+          )}
         </div>
 
         {/* Email */}
@@ -95,22 +105,31 @@ export const ContactProviderCard: React.FC<ContactProviderCardProps> = ({
             <span className="text-[10px] uppercase text-on-surface-variant font-medium block">
               ✉️ Official Email
             </span>
-            <div className="text-on-surface font-semibold text-xs truncate">
-              {contactDemo.email}
-            </div>
+            {hasEmail ? (
+              <div className="text-on-surface font-semibold text-xs truncate">
+                {contactDemo.email}
+              </div>
+            ) : (
+              <div className="text-on-surface-variant italic text-xs truncate">
+                Email not provided
+              </div>
+            )}
           </div>
 
-          <a
-            href={`mailto:${contactDemo.email}`}
-            className="p-1.5 rounded-lg bg-surface-container-high hover:bg-surface-bright text-on-surface-variant hover:text-on-surface transition-colors text-[11px] font-semibold flex items-center gap-1 flex-shrink-0"
-            title={`Email ${providerName}`}
-          >
-            <Icon name="mail" className="text-[14px]" />
-            <span className="hidden sm:inline">Email</span>
-          </a>
+          {hasEmail && (
+            <a
+              href={`mailto:${contactDemo.email}`}
+              className="p-1.5 rounded-lg bg-surface-container-high hover:bg-surface-bright text-on-surface-variant hover:text-on-surface transition-colors text-[11px] font-semibold flex items-center gap-1 flex-shrink-0"
+              title={`Email ${providerName}`}
+            >
+              <Icon name="mail" className="text-[14px]" />
+              <span className="hidden sm:inline">Email</span>
+            </a>
+          )}
         </div>
       </div>
     </div>
+
   );
 };
 

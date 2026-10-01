@@ -81,10 +81,10 @@ export const CustomerLoginPage: React.FC = () => {
         res?.data?.user && typeof res.data.user === 'object'
           ? res.data.user
           : res?.user && typeof res.user === 'object'
-          ? res.user
-          : res?.data && typeof res.data === 'object' && ('id' in res.data || 'email' in res.data)
-          ? res.data
-          : null;
+            ? res.user
+            : res?.data && typeof res.data === 'object' && ('id' in res.data || 'email' in res.data)
+              ? res.data
+              : null;
 
       // 3. Customer / Provider Role separation check (Requirement 9)
       const role = backendUser?.role || res?.data?.role;
@@ -262,7 +262,7 @@ export const CustomerLoginPage: React.FC = () => {
                     onClick={() => setForgotPasswordNotice(true)}
                     className="text-xs text-primary hover:underline font-medium"
                   >
-                    Forgot Password?
+                    {/* Forgot Password? */}
                   </button>
                 </div>
                 <div className="relative">
@@ -321,7 +321,7 @@ export const CustomerLoginPage: React.FC = () => {
             </form>
 
             {/* Quick Demo Credentials Helper */}
-            <div className="mt-5 p-3 rounded-xl bg-surface-container/70 border border-surface-container-highest/50 text-center">
+            {/* <div className="mt-5 p-3 rounded-xl bg-surface-container/70 border border-surface-container-highest/50 text-center">
               <span className="text-[11px] text-on-surface-variant block mb-1.5">
                 Quick Demo Customer Account:
               </span>
@@ -333,7 +333,7 @@ export const CustomerLoginPage: React.FC = () => {
                 <Icon name="auto_awesome" className="text-[14px]" />
                 <span>Fill Ananya Nair Demo</span>
               </button>
-            </div>
+            </div> */}
 
             {/* Links to Signup and Provider Sign In */}
             <div className="text-center mt-6 pt-4 border-t border-surface-container space-y-2">

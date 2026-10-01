@@ -1,7 +1,6 @@
 import { ProviderAccount, ProviderSession, ProviderCategoryType, CategorySpecificData } from '../types/provider';
 import { Booking, BookingStatus } from '../types/booking';
 import { Provider } from '../types/service';
-import { MOCK_PROVIDERS } from '../data/mockProviders';
 import {
   authApi,
   providersApi,
@@ -31,88 +30,33 @@ export function verifyPassword(plain: string, hash: string): boolean {
   return hashPassword(plain) === hash;
 }
 
-// Initial demo accounts seeded if none exist
-function getInitialProviders(): ProviderAccount[] {
-  return [
-    {
-      id: 'lenscraft-studio',
-      fullName: 'Rohit Menon',
-      businessName: 'LensCraft Studio',
-      email: 'studio@lenscraft.com',
-      phone: '+91 94470 12345',
-      location: 'Palakkad, Kerala',
-      description: 'Premier visual storytellers capturing candid rituals, cinematic slow-motion highlights, and timeless heirloom photo albums.',
-      yearsExperience: 8,
-      startingPrice: 45000,
-      category: 'Photographer',
-      profileImage: 'https://images.unsplash.com/photo-1519741497674-611481863552?auto=format&fit=crop&w=400&q=80',
-      createdAt: '2026-01-10T10:00:00.000Z',
-      categoryData: {
-        photographyStyles: ['Candid Photography', 'Cinematic Wedding Films', 'Drone Aerial 4K', 'Traditional Portraiture'],
-        equipment: 'Sony FX3 Cinema Rigs, Alpha 7 IV, DJI Mavic 3 Pro Cine, Prime G-Master lenses',
-        servicesOffered: ['Full-Day Wedding Coverage', 'Pre-Wedding Conceptual Shoots', 'Same-Day Highlights', 'Handcrafted Albums'],
-        portfolioImages: [
-          'https://images.unsplash.com/photo-1519741497674-611481863552?auto=format&fit=crop&w=1200&q=80',
-          'https://images.unsplash.com/photo-1511285560929-80b456fea0bc?auto=format&fit=crop&w=1200&q=80',
-          'https://images.unsplash.com/photo-1537633552985-df8429e8048b?auto=format&fit=crop&w=1200&q=80',
-        ],
-        packageInfo: [
-          { name: 'Essential Gold', price: 45000, description: 'Single-day core coverage for ceremonies and rituals' },
-          { name: 'Royal Heirloom Platinum', price: 85000, description: 'Comprehensive 2-day multi-camera master wedding capture' },
-        ],
-      },
-    },
-    {
-      id: 'grand-regal-auditorium',
-      fullName: 'Sunil Varma',
-      businessName: 'Grand Regal Palace',
-      email: 'events@grandregal.com',
-      phone: '+91 98471 99882',
-      location: 'Thrissur, Kerala',
-      description: 'Air-conditioned luxury ballroom and heritage open-air convention center for grand celebratory banquets.',
-      yearsExperience: 14,
-      startingPrice: 150000,
-      category: 'Venue / Auditorium',
-      profileImage: 'https://images.unsplash.com/photo-1519167758481-83f550bb49b3?auto=format&fit=crop&w=400&q=80',
-      createdAt: '2026-02-15T12:00:00.000Z',
-      categoryData: {
-        capacity: 1200,
-        hasAC: true,
-        hasParking: true,
-        hasStage: true,
-        hasDining: true,
-        roomsCount: 8,
-        otherFacilities: 'Bridal green rooms, VIP lounge, generator backup, valet parking',
-        servicesOffered: ['Full Venue Rental', 'Stage Lighting Setup', 'Round Table Banquet Arrangement'],
-        portfolioImages: [
-          'https://images.unsplash.com/photo-1519167758481-83f550bb49b3?auto=format&fit=crop&w=1200&q=80',
-          'https://images.unsplash.com/photo-1545232979-fbf673646545?auto=format&fit=crop&w=1200&q=80',
-        ],
-      },
-    },
-  ];
-}
-
 export function getRegisteredProviders(): ProviderAccount[] {
   try {
     const raw = localStorage.getItem(PROVIDERS_KEY);
     if (!raw) {
-      const initial = getInitialProviders();
-      localStorage.setItem(PROVIDERS_KEY, JSON.stringify(initial));
-      return initial;
+      return [];
     }
     const parsed = JSON.parse(raw);
     return Array.isArray(parsed) ? parsed : [];
   } catch (err) {
     console.warn('Failed reading registered providers from localStorage:', err);
-    return getInitialProviders();
+    return [];
   }
 }
 
 export function saveProviderAccount(account: ProviderAccount): void {
   try {
+    if (!account || !account.id) return;
     const list = getRegisteredProviders();
-    const existingIndex = list.findIndex((p) => p.id === account.id || p.email.toLowerCase() === account.email.toLowerCase());
+    const accountEmail = typeof account.email === 'string' ? account.email.trim().toLowerCase() : '';
+
+    const existingIndex = list.findIndex((p) => {
+      if (p.id === account.id) return true;
+      const pEmail = typeof p.email === 'string' ? p.email.trim().toLowerCase() : '';
+      if (accountEmail && pEmail && accountEmail === pEmail) return true;
+      return false;
+    });
+
     if (existingIndex >= 0) {
       list[existingIndex] = { ...list[existingIndex], ...account };
     } else {
@@ -184,41 +128,222 @@ export function compressImageFile(
   });
 }
 
-export function getProviderProfile(providerId: string): ProviderAccount | null {
-  const list = getRegisteredProviders();
-  const found = list.find((p) => p.id === providerId);
-  if (found) return found;
+/**
+ * Safely extracts a category name/string from various backend shapes (string, number, object, nested category).
+ */
+export function extractCategoryString(cat: any): string {
+  if (!cat) return '';
+  if (typeof cat === 'string') return cat.trim();
+  if (typeof cat === 'number' || typeof cat === 'boolean') return String(cat);
+  if (typeof cat === 'object') {
+    // Check direct candidate fields
+    const candidate =
+      cat.name ??
+      cat.categoryName ??
+      cat.category_name ??
+      cat.serviceCategory ??
+      cat.service_category ??
+      cat.providerCategory ??
+      cat.provider_category ??
+      cat.label ??
+      cat.title ??
+      cat.category ??
+      cat.type ??
+      cat.value ??
+      cat.slug ??
+      cat.id;
 
-  // Fallback to MOCK_PROVIDERS if available
-  const mock = MOCK_PROVIDERS.find((p) => p.id === providerId);
-  if (mock) {
-    return {
-      id: mock.id,
-      fullName: mock.name,
-      businessName: mock.name,
-      email: `${mock.id}@eva-ai.internal`,
-      phone: '+91 94470 00000',
-      location: mock.location,
-      description: mock.description || mock.about,
-      yearsExperience: mock.yearsExperience || 5,
-      startingPrice: mock.startingPrice,
-      category: (mock.category as ProviderCategoryType) || 'Photographer',
-      profileImage: mock.images?.[0],
-      createdAt: new Date().toISOString(),
-      categoryData: {
-        servicesOffered: mock.services || [],
-        portfolioImages: mock.images || [],
-        packageInfo: mock.packages?.map((pkg, idx) => ({
-          id: `pkg-${mock.id}-${idx + 1}`,
-          name: pkg.name,
-          price: pkg.price,
-          description: pkg.description,
-          features: pkg.features || [],
-        })),
-      },
-    };
+    if (typeof candidate === 'string' && candidate.trim()) {
+      return candidate.trim();
+    }
+    if (typeof candidate === 'object' && candidate !== null) {
+      const nested = extractCategoryString(candidate);
+      if (nested) return nested;
+    }
+    if (cat.category) {
+      const nested = extractCategoryString(cat.category);
+      if (nested) return nested;
+    }
+    if (cat.service) {
+      const nested = extractCategoryString(cat.service);
+      if (nested) return nested;
+    }
+    for (const [k, v] of Object.entries(cat)) {
+      if (
+        k !== 'id' &&
+        k !== '_id' &&
+        k !== 'createdAt' &&
+        k !== 'updatedAt' &&
+        typeof v === 'string' &&
+        v.trim() &&
+        v.length < 100
+      ) {
+        return v.trim();
+      }
+    }
   }
-  return null;
+  return '';
+}
+
+/**
+ * Single source of truth for normalizing provider category into valid ProviderCategoryType.
+ * Preserves dynamic categories and correctly handles aliases without generic fallbacks to Event Manager.
+ */
+export function normalizeProviderCategory(cat: any): ProviderCategoryType | '' {
+  const str = extractCategoryString(cat);
+  if (!str) return '';
+
+  const lower = str.toLowerCase();
+
+  // 1. Photographer & Cinematography
+  if (
+    lower === 'photographer' ||
+    lower === 'photography' ||
+    lower.includes('photo') ||
+    lower.includes('camera') ||
+    lower.includes('cinematograph') ||
+    lower.includes('videograph') ||
+    lower.includes('album') ||
+    lower.includes('film')
+  ) {
+    return 'Photographer';
+  }
+
+  // 2. Makeup & Beauty
+  if (
+    lower === 'makeup artist' ||
+    lower === 'makeup' ||
+    lower === 'make-up' ||
+    lower === 'make up' ||
+    lower.includes('makeup') ||
+    lower.includes('make-up') ||
+    lower.includes('make up') ||
+    lower.includes('bridal makeup') ||
+    lower.includes('beauty') ||
+    lower.includes('cosmetic') ||
+    lower.includes('salon') ||
+    lower.includes('makeover') ||
+    lower.includes('hair stylist') ||
+    lower.includes('mehendi') ||
+    lower.includes('mehndi') ||
+    lower.includes('henna')
+  ) {
+    return 'Makeup Artist';
+  }
+
+  // 3. Venue / Auditorium / Halls
+  if (
+    lower === 'venue / auditorium' ||
+    lower === 'venue & auditorium' ||
+    lower === 'venue' ||
+    lower === 'auditorium' ||
+    lower.includes('venue') ||
+    lower.includes('auditorium') ||
+    lower.includes('hall') ||
+    lower.includes('convention') ||
+    lower.includes('ballroom') ||
+    lower.includes('resort') ||
+    lower.includes('palace')
+  ) {
+    return 'Venue / Auditorium';
+  }
+
+  // 4. Caterer / Catering / Food
+  if (
+    lower === 'caterer' ||
+    lower === 'catering' ||
+    lower.includes('cater') ||
+    lower.includes('food') ||
+    lower.includes('sadya') ||
+    lower.includes('sadhya') ||
+    lower.includes('culinary') ||
+    lower.includes('cuisine') ||
+    lower.includes('dining') ||
+    lower.includes('chef')
+  ) {
+    return 'Caterer';
+  }
+
+  // 5. Decorator / Floral / Mandap
+  if (
+    lower === 'decorator' ||
+    lower === 'decoration' ||
+    lower.includes('decor') ||
+    lower.includes('mandap') ||
+    lower.includes('florist') ||
+    lower.includes('floral') ||
+    lower.includes('flower') ||
+    lower.includes('stage decor')
+  ) {
+    return 'Decorator';
+  }
+
+  // 6. DJ / Entertainment / Artist / Live Bands / Music / Sound
+  if (
+    lower === 'dj / entertainment' ||
+    lower === 'dj & entertainment' ||
+    lower === 'dj / artist' ||
+    lower === 'dj & artist' ||
+    lower === 'dj/artist' ||
+    lower === 'dj' ||
+    lower === 'entertainment' ||
+    lower === 'artist' ||
+    lower.includes('dj') ||
+    lower.includes('entertain') ||
+    lower.includes('music') ||
+    lower.includes('sound') ||
+    lower.includes('band') ||
+    lower.includes('singer') ||
+    lower.includes('acoustic') ||
+    lower.includes('audio') ||
+    lower.includes('performer') ||
+    lower.includes('performance') ||
+    lower.includes('orchestra')
+  ) {
+    return 'DJ / Entertainment';
+  }
+
+  // 7. Event Manager / Coordinator / Planner
+  if (
+    lower === 'event manager' ||
+    lower === 'event management' ||
+    lower === 'event planner' ||
+    lower === 'event planning' ||
+    lower === 'event coordinator' ||
+    lower === 'coordinator' ||
+    lower === 'coordination' ||
+    lower === 'event organizer' ||
+    lower === 'organizer' ||
+    lower === 'planner' ||
+    lower.includes('event manager') ||
+    lower.includes('event management') ||
+    lower.includes('event planner') ||
+    lower.includes('event coordinat') ||
+    lower.includes('coordinat') ||
+    lower.includes('planner') ||
+    lower.includes('organizer') ||
+    lower === 'event' ||
+    lower === 'management'
+  ) {
+    return 'Event Manager';
+  }
+
+  // Return original trimmed category string if not in the default 7
+  return str as ProviderCategoryType;
+}
+
+export function getProviderProfile(providerId: string): ProviderAccount | null {
+  if (!providerId) return null;
+  const list = getRegisteredProviders();
+  const trimmed = providerId.trim().toLowerCase();
+  const isEmailSearch = trimmed.includes('@');
+  const found = list.find(
+    (p) =>
+      p.id === providerId ||
+      (p.id && p.id.toLowerCase() === trimmed) ||
+      (isEmailSearch && p.email && p.email.trim().toLowerCase() === trimmed)
+  );
+  return found || null;
 }
 
 export function normalizeBackendProviderProfile(
@@ -226,39 +351,335 @@ export function normalizeBackendProviderProfile(
   existingFallback?: ProviderAccount | null
 ): ProviderAccount | null {
   if (!raw || typeof raw !== 'object') return existingFallback || null;
-  const data =
-    raw.data?.provider ||
-    raw.data?.profile ||
-    raw.data?.user ||
-    raw.data ||
-    raw.provider ||
-    raw.profile ||
-    raw.user ||
-    raw;
+
+  // Extract candidate nested objects to inspect all response levels safely
+  const rawData = raw.data && typeof raw.data === 'object' ? raw.data : {};
+  const rawProvider = raw.provider && typeof raw.provider === 'object' ? raw.provider : {};
+  const rawProfile = raw.profile && typeof raw.profile === 'object' ? raw.profile : {};
+  const rawUser = raw.user && typeof raw.user === 'object' ? raw.user : {};
+  const rawProviderProfile = raw.providerProfile && typeof raw.providerProfile === 'object' ? raw.providerProfile : {};
+  const rawProviderProfileSnake = raw.provider_profile && typeof raw.provider_profile === 'object' ? raw.provider_profile : {};
+
+  const dataProvider = rawData.provider && typeof rawData.provider === 'object' ? rawData.provider : {};
+  const dataProfile = rawData.profile && typeof rawData.profile === 'object' ? rawData.profile : {};
+  const dataUser = rawData.user && typeof rawData.user === 'object' ? rawData.user : {};
+  const dataProviderProfile = rawData.providerProfile && typeof rawData.providerProfile === 'object' ? rawData.providerProfile : {};
+  const dataProviderProfileSnake = rawData.provider_profile && typeof rawData.provider_profile === 'object' ? rawData.provider_profile : {};
+
+  const userProviderProfile = rawUser.providerProfile && typeof rawUser.providerProfile === 'object' ? rawUser.providerProfile : {};
+  const userProviderProfileSnake = rawUser.provider_profile && typeof rawUser.provider_profile === 'object' ? rawUser.provider_profile : {};
+  const userProvider = rawUser.provider && typeof rawUser.provider === 'object' ? rawUser.provider : {};
+
+  const dataUserProviderProfile = dataUser.providerProfile && typeof dataUser.providerProfile === 'object' ? dataUser.providerProfile : {};
+  const dataUserProviderProfileSnake = dataUser.provider_profile && typeof dataUser.provider_profile === 'object' ? dataUser.provider_profile : {};
+  const dataUserProvider = dataUser.provider && typeof dataUser.provider === 'object' ? dataUser.provider : {};
+
+  // Merged lookup object where provider/profile properties take precedence, with user/data enrichment
+  const data = {
+    ...raw,
+    ...rawData,
+    ...rawUser,
+    ...dataUser,
+    ...rawProfile,
+    ...dataProfile,
+    ...rawProviderProfile,
+    ...rawProviderProfileSnake,
+    ...dataProviderProfile,
+    ...dataProviderProfileSnake,
+    ...userProviderProfile,
+    ...userProviderProfileSnake,
+    ...userProvider,
+    ...dataUserProviderProfile,
+    ...dataUserProviderProfileSnake,
+    ...dataUserProvider,
+    ...rawProvider,
+    ...dataProvider,
+  };
   if (!data || typeof data !== 'object') return existingFallback || null;
 
-  const id = data.id || data._id || data.providerId || existingFallback?.id || '';
-  const fullName = data.fullName || data.name || data.managerName || existingFallback?.fullName || '';
-  const businessName =
-    data.businessName || data.companyName || data.name || existingFallback?.businessName || fullName || '';
+  const id =
+    dataProvider.id || dataProvider._id || dataProvider.providerId || dataProvider.provider_id ||
+    rawProvider.id || rawProvider._id || rawProvider.providerId || rawProvider.provider_id ||
+    dataProviderProfile.id || dataProviderProfile._id || dataProviderProfile.providerId || dataProviderProfile.provider_id ||
+    rawProviderProfile.id || rawProviderProfile._id || rawProviderProfile.providerId || rawProviderProfile.provider_id ||
+    rawData.id || rawData._id || rawData.providerId || rawData.provider_id ||
+    raw.id || raw._id || raw.providerId || raw.provider_id ||
+    dataProfile.id || dataProfile._id || dataProfile.providerId || dataProfile.provider_id ||
+    rawProfile.id || rawProfile._id || rawProfile.providerId || rawProfile.provider_id ||
+    dataUser.id || dataUser._id || dataUser.userId || dataUser.user_id ||
+    rawUser.id || rawUser._id || rawUser.userId || rawUser.user_id ||
+    data.userId || data.user_id ||
+    existingFallback?.id ||
+    '';
+
+  // Explicit fullName resolution (prioritizing explicit fullName / contact person / manager / user fields)
+  const explicitFullName =
+    dataProvider.fullName || dataProvider.full_name || dataProvider.managerName || dataProvider.manager_name || dataProvider.contactPerson || dataProvider.contact_person ||
+    rawProvider.fullName || rawProvider.full_name || rawProvider.managerName || rawProvider.manager_name || rawProvider.contactPerson || rawProvider.contact_person ||
+    dataProfile.fullName || dataProfile.full_name || dataProfile.managerName || dataProfile.manager_name || dataProfile.contactPerson || dataProfile.contact_person ||
+    rawProfile.fullName || rawProfile.full_name || rawProfile.managerName || rawProfile.manager_name || rawProfile.contactPerson || rawProfile.contact_person ||
+    dataUser.fullName || dataUser.full_name || dataUser.name || dataUser.managerName || dataUser.manager_name || dataUser.contactPerson || dataUser.contact_person ||
+    rawUser.fullName || rawUser.full_name || rawUser.name || rawUser.managerName || rawUser.manager_name || rawUser.contactPerson || rawUser.contact_person ||
+    rawData.fullName || rawData.full_name || rawData.managerName || rawData.manager_name || rawData.contactPerson || rawData.contact_person ||
+    raw.fullName || raw.full_name || raw.managerName || raw.manager_name || raw.contactPerson || raw.contact_person ||
+    existingFallback?.fullName ||
+    '';
+
+  // Explicit businessName resolution (prioritizing business / brand / venue / company / studio fields)
+  const explicitBusinessName =
+    dataProvider.businessName || dataProvider.business_name || dataProvider.brandName || dataProvider.brand_name || dataProvider.venueName || dataProvider.venue_name || dataProvider.companyName || dataProvider.company_name || dataProvider.studioName || dataProvider.studio_name ||
+    rawProvider.businessName || rawProvider.business_name || rawProvider.brandName || rawProvider.brand_name || rawProvider.venueName || rawProvider.venue_name || rawProvider.companyName || rawProvider.company_name || rawProvider.studioName || rawProvider.studio_name ||
+    dataProfile.businessName || dataProfile.business_name || dataProfile.brandName || dataProfile.brand_name || dataProfile.venueName || dataProfile.venue_name || dataProfile.companyName || dataProfile.company_name || dataProfile.studioName || dataProfile.studio_name ||
+    rawProfile.businessName || rawProfile.business_name || rawProfile.brandName || rawProfile.brand_name || rawProfile.venueName || rawProfile.venue_name || rawProfile.companyName || rawProfile.company_name || rawProfile.studioName || rawProfile.studio_name ||
+    rawData.businessName || rawData.business_name || rawData.brandName || rawData.brand_name || rawData.venueName || rawData.venue_name || rawData.companyName || rawData.company_name || rawData.studioName || rawData.studio_name ||
+    raw.businessName || raw.business_name || raw.brandName || raw.brand_name || raw.venueName || raw.venue_name || raw.companyName || raw.company_name || raw.studioName || raw.studio_name ||
+    existingFallback?.businessName ||
+    '';
+
+  const genericName =
+    dataProvider.name ||
+    rawProvider.name ||
+    dataProfile.name ||
+    rawProfile.name ||
+    rawData.name ||
+    raw.name ||
+    '';
+
+  let businessName = '';
+  let fullName = '';
+
+  if (explicitBusinessName && explicitFullName) {
+    businessName = explicitBusinessName;
+    fullName = explicitFullName;
+  } else if (explicitBusinessName && !explicitFullName) {
+    businessName = explicitBusinessName;
+    fullName = genericName && genericName.trim().toLowerCase() !== explicitBusinessName.trim().toLowerCase()
+      ? genericName
+      : existingFallback?.fullName || '';
+  } else if (!explicitBusinessName && explicitFullName) {
+    fullName = explicitFullName;
+    businessName = genericName && genericName.trim().toLowerCase() !== explicitFullName.trim().toLowerCase()
+      ? genericName
+      : explicitFullName;
+  } else if (genericName) {
+    businessName = genericName;
+    fullName = existingFallback?.fullName || genericName;
+  } else {
+    businessName = existingFallback?.businessName || '';
+    fullName = existingFallback?.fullName || '';
+  }
+
   const email = data.email || existingFallback?.email || '';
-  const phone = data.phone || existingFallback?.phone || '';
-  const location = data.location || data.city || data.address || existingFallback?.location || '';
-  const description = data.description || data.about || existingFallback?.description || '';
-  const yearsExperience =
+  const phone = data.phone || data.phoneNumber || data.phone_number || existingFallback?.phone || '';
+
+  // Location normalization: check all candidate sources across provider, user, data, and root
+  const rawLoc =
+    dataProvider.location || dataProvider.location_name ||
+    rawProvider.location || rawProvider.location_name ||
+    dataProfile.location || dataProfile.location_name ||
+    rawProfile.location || rawProfile.location_name ||
+    dataUser.location || dataUser.location_name ||
+    rawUser.location || rawUser.location_name ||
+    rawData.location || rawData.location_name ||
+    raw.location || raw.location_name ||
+    '';
+
+  const rawCity =
+    dataProvider.city || rawProvider.city ||
+    dataProfile.city || rawProfile.city ||
+    dataUser.city || rawUser.city ||
+    rawData.city || raw.city ||
+    '';
+
+  const rawState =
+    dataProvider.state || rawProvider.state ||
+    dataProfile.state || rawProfile.state ||
+    dataUser.state || rawUser.state ||
+    rawData.state || raw.state ||
+    '';
+
+  const rawDistrict =
+    dataProvider.district || rawProvider.district ||
+    dataProfile.district || rawProfile.district ||
+    dataUser.district || rawUser.district ||
+    rawData.district || raw.district ||
+    '';
+
+  const rawAddress =
+    dataProvider.address || rawProvider.address ||
+    dataProfile.address || rawProfile.address ||
+    dataUser.address || rawUser.address ||
+    rawData.address || raw.address ||
+    '';
+
+  let location = '';
+  if (typeof rawLoc === 'string' && rawLoc.trim()) {
+    location = rawLoc.trim();
+  } else if (rawCity && rawState) {
+    const c = String(rawCity).trim();
+    const s = String(rawState).trim();
+    location = c.toLowerCase() === s.toLowerCase() ? c : `${c}, ${s}`;
+  } else if (rawDistrict && rawState) {
+    const d = String(rawDistrict).trim();
+    const s = String(rawState).trim();
+    location = d.toLowerCase() === s.toLowerCase() ? d : `${d}, ${s}`;
+  } else if (rawCity) {
+    location = String(rawCity).trim();
+  } else if (rawDistrict) {
+    location = String(rawDistrict).trim();
+  } else if (rawState) {
+    location = String(rawState).trim();
+  } else if (rawAddress) {
+    location = String(rawAddress).trim();
+  } else {
+    location = existingFallback?.location || '';
+  }
+
+  const description = data.description || data.about || data.bio || existingFallback?.description || '';
+
+  // Experience: Preserve valid 0; check all camelCase, snake_case, and alias variations
+  const rawYears =
     data.yearsExperience !== undefined && data.yearsExperience !== null
-      ? Number(data.yearsExperience)
-      : data.experience !== undefined && data.experience !== null
-      ? Number(data.experience)
-      : existingFallback?.yearsExperience ?? 5;
-  const startingPrice =
+      ? data.yearsExperience
+      : data.years_experience !== undefined && data.years_experience !== null
+        ? data.years_experience
+        : data.experience !== undefined && data.experience !== null
+          ? data.experience
+          : data.experience_years !== undefined && data.experience_years !== null
+            ? data.experience_years
+            : data.experienceYears !== undefined && data.experienceYears !== null
+              ? data.experienceYears
+              : data.years !== undefined && data.years !== null
+                ? data.years
+                : data.yearsOfExperience !== undefined && data.yearsOfExperience !== null
+                  ? data.yearsOfExperience
+                  : data.years_of_experience !== undefined && data.years_of_experience !== null
+                    ? data.years_of_experience
+                    : data.experience_in_years !== undefined && data.experience_in_years !== null
+                      ? data.experience_in_years
+                      : existingFallback?.yearsExperience;
+
+  const yearsExperience =
+    rawYears !== undefined &&
+      rawYears !== null &&
+      rawYears !== '' &&
+      !isNaN(Number(rawYears))
+      ? Number(rawYears)
+      : 0;
+
+  // Starting price: Preserve valid 0 or number; check snake_case variations
+  const rawStartingPrice =
     data.startingPrice !== undefined && data.startingPrice !== null
-      ? Number(data.startingPrice)
-      : data.price !== undefined && data.price !== null
-      ? Number(data.price)
-      : existingFallback?.startingPrice ?? 25000;
-  const category = (data.category as ProviderCategoryType) || existingFallback?.category || 'Photographer';
-  const profileImage = data.profileImage || data.avatar || data.image || existingFallback?.profileImage;
+      ? data.startingPrice
+      : data.starting_price !== undefined && data.starting_price !== null
+        ? data.starting_price
+        : data.basePrice !== undefined && data.basePrice !== null
+          ? data.basePrice
+          : data.base_price !== undefined && data.base_price !== null
+            ? data.base_price
+            : data.price !== undefined && data.price !== null
+              ? data.price
+              : data.rate !== undefined && data.rate !== null
+                ? data.rate
+                : data.startingRate !== undefined && data.startingRate !== null
+                  ? data.startingRate
+                  : data.starting_rate !== undefined && data.starting_rate !== null
+                    ? data.starting_rate
+                    : data.minPrice !== undefined && data.minPrice !== null
+                      ? data.minPrice
+                      : data.min_price !== undefined && data.min_price !== null
+                        ? data.min_price
+                        : existingFallback?.startingPrice;
+
+  const startingPrice =
+    rawStartingPrice !== undefined && rawStartingPrice !== null && rawStartingPrice !== '' && !isNaN(Number(rawStartingPrice))
+      ? Number(rawStartingPrice)
+      : 0;
+
+  // Extract category checking all backend response field variations
+  const rawCat =
+    extractCategoryString(dataProvider.category) ||
+    extractCategoryString(dataProvider.serviceCategory) ||
+    extractCategoryString(dataProvider.service_category) ||
+    extractCategoryString(dataProvider.providerCategory) ||
+    extractCategoryString(dataProvider.provider_category) ||
+    extractCategoryString(dataProvider.categoryName) ||
+    extractCategoryString(dataProvider.category_name) ||
+    extractCategoryString(dataProvider.category_id) ||
+    extractCategoryString(dataProvider.categoryId) ||
+    extractCategoryString(rawProvider.category) ||
+    extractCategoryString(rawProvider.serviceCategory) ||
+    extractCategoryString(rawProvider.service_category) ||
+    extractCategoryString(rawProvider.providerCategory) ||
+    extractCategoryString(rawProvider.categoryName) ||
+    extractCategoryString(dataProviderProfile.category) ||
+    extractCategoryString(dataProviderProfile.serviceCategory) ||
+    extractCategoryString(dataProviderProfileSnake.category) ||
+    extractCategoryString(rawProviderProfile.category) ||
+    extractCategoryString(rawProviderProfileSnake.category) ||
+    extractCategoryString(userProviderProfile.category) ||
+    extractCategoryString(userProviderProfileSnake.category) ||
+    extractCategoryString(userProvider.category) ||
+    extractCategoryString(dataUserProviderProfile.category) ||
+    extractCategoryString(dataUserProviderProfileSnake.category) ||
+    extractCategoryString(dataUserProvider.category) ||
+    extractCategoryString(dataProfile.category) ||
+    extractCategoryString(dataProfile.serviceCategory) ||
+    extractCategoryString(rawProfile.category) ||
+    extractCategoryString(rawProfile.serviceCategory) ||
+    extractCategoryString(dataUser.category) ||
+    extractCategoryString(dataUser.serviceCategory) ||
+    extractCategoryString(dataUser.service_category) ||
+    extractCategoryString(rawUser.category) ||
+    extractCategoryString(rawUser.serviceCategory) ||
+    extractCategoryString(rawUser.service_category) ||
+    extractCategoryString(rawData.category) ||
+    extractCategoryString(rawData.serviceCategory) ||
+    extractCategoryString(rawData.service_category) ||
+    extractCategoryString(rawData.providerCategory) ||
+    extractCategoryString(rawData.categoryName) ||
+    extractCategoryString(data.category) ||
+    extractCategoryString(data.serviceCategory) ||
+    extractCategoryString(data.service_category) ||
+    extractCategoryString(data.providerCategory) ||
+    extractCategoryString(data.categoryName) ||
+    extractCategoryString(raw.category) ||
+    extractCategoryString(raw.serviceCategory) ||
+    extractCategoryString(raw.service_category) ||
+    extractCategoryString(raw.providerCategory) ||
+    extractCategoryString(raw.categoryName) ||
+    extractCategoryString(data.service?.category) ||
+    extractCategoryString(raw.service?.category);
+
+  const normalizedCategory = normalizeProviderCategory(rawCat);
+  const fallbackCat = existingFallback?.category ? normalizeProviderCategory(existingFallback.category) : '';
+  const currentSessionCat = getProviderSession()?.providerId === id ? normalizeProviderCategory(getProviderSession()?.category) : '';
+
+  const category: ProviderCategoryType =
+    (normalizedCategory as ProviderCategoryType) ||
+    (fallbackCat as ProviderCategoryType) ||
+    (currentSessionCat as ProviderCategoryType) ||
+    (rawCat ? (rawCat as ProviderCategoryType) : ('' as ProviderCategoryType));
+
+  // Support all backend profile image keys
+  const profileImage =
+    data.profileImage ||
+    data.profile_image ||
+    data.imageUrl ||
+    data.image_url ||
+    data.avatar ||
+    data.avatar_url ||
+    data.coverImage ||
+    data.cover_image ||
+    data.photoUrl ||
+    data.photo_url ||
+    data.fileUrl ||
+    data.file_url ||
+    data.mediaUrl ||
+    data.media_url ||
+    data.image ||
+    existingFallback?.profileImage;
+
   const approvalStatus = data.approvalStatus || data.approval_status || existingFallback?.approvalStatus || 'APPROVED';
   const createdAt = data.createdAt || data.created_at || existingFallback?.createdAt || new Date().toISOString();
   const updatedAt = data.updatedAt || data.updated_at || existingFallback?.updatedAt || new Date().toISOString();
@@ -266,6 +687,67 @@ export function normalizeBackendProviderProfile(
   // Merge categoryData safely preserving portfolio and packages
   const incomingCatData = data.categoryData || data.category_data || {};
   const existingCatData = existingFallback?.categoryData || {};
+
+  // Normalize packages from root or categoryData if provided by backend
+  const rawIncomingPackages =
+    incomingCatData.packageInfo ||
+    incomingCatData.package_info ||
+    incomingCatData.packages ||
+    incomingCatData.services ||
+    data.packageInfo ||
+    data.package_info ||
+    data.packages ||
+    data.services ||
+    data.servicePackages ||
+    data.service_packages ||
+    raw.packages ||
+    raw.services;
+
+  const mergedPackageInfo = rawIncomingPackages
+    ? normalizeServicePackages(rawIncomingPackages)
+    : existingCatData.packageInfo;
+
+  // Normalize portfolio items from root or categoryData if provided
+  const rawIncomingPortfolio =
+    incomingCatData.portfolioImages ||
+    incomingCatData.portfolio_images ||
+    incomingCatData.portfolio ||
+    incomingCatData.portfolios ||
+    incomingCatData.images ||
+    dataProvider.portfolioImages ||
+    dataProvider.portfolio_images ||
+    dataProvider.portfolio ||
+    dataProvider.portfolios ||
+    dataProvider.images ||
+    rawProvider.portfolioImages ||
+    rawProvider.portfolio_images ||
+    rawProvider.portfolio ||
+    rawProvider.portfolios ||
+    rawProvider.images ||
+    dataProfile.portfolioImages ||
+    dataProfile.portfolio_images ||
+    dataProfile.portfolio ||
+    dataProfile.portfolios ||
+    dataProfile.images ||
+    rawData.portfolioImages ||
+    rawData.portfolio_images ||
+    rawData.portfolio ||
+    rawData.portfolios ||
+    rawData.images ||
+    data.portfolioImages ||
+    data.portfolio_images ||
+    data.portfolio ||
+    data.portfolios ||
+    data.images ||
+    raw.portfolioImages ||
+    raw.portfolio_images ||
+    raw.portfolio ||
+    raw.portfolios ||
+    raw.images;
+
+  const mergedPortfolioImages = rawIncomingPortfolio !== undefined && rawIncomingPortfolio !== null
+    ? normalizePortfolioItems(rawIncomingPortfolio)
+    : existingCatData.portfolioImages;
 
   const mergedCategoryData: CategorySpecificData = {
     ...existingCatData,
@@ -290,15 +772,8 @@ export function normalizeBackendProviderProfile(
     entertainmentTypes: incomingCatData.entertainmentTypes || existingCatData.entertainmentTypes,
     eventTypesHandled: incomingCatData.eventTypesHandled || existingCatData.eventTypesHandled,
     servicesOffered: incomingCatData.servicesOffered || existingCatData.servicesOffered,
-    // Strictly preserve portfolio and pricing tiers!
-    portfolioImages:
-      incomingCatData.portfolioImages && incomingCatData.portfolioImages.length > 0
-        ? incomingCatData.portfolioImages
-        : existingCatData.portfolioImages,
-    packageInfo:
-      incomingCatData.packageInfo && incomingCatData.packageInfo.length > 0
-        ? incomingCatData.packageInfo
-        : existingCatData.packageInfo,
+    portfolioImages: mergedPortfolioImages,
+    packageInfo: mergedPackageInfo,
   };
 
   return {
@@ -376,14 +851,16 @@ export function updateProviderProfile(providerId: string, updates: Partial<Provi
  * Normalizes portfolio image data from backend GET /providers/portfolio
  */
 export function normalizePortfolioItems(raw: any, fallbackImages: string[] = []): string[] {
-  if (!raw) return fallbackImages;
-  let list: any[] = [];
+  if (raw === undefined || raw === null) return fallbackImages;
+  let list: any[] | null = null;
   if (Array.isArray(raw)) {
     list = raw;
-  } else if (Array.isArray(raw?.data)) {
-    list = raw.data;
+  } else if (Array.isArray(raw?.portfolios)) {
+    list = raw.portfolios;
   } else if (Array.isArray(raw?.portfolio)) {
     list = raw.portfolio;
+  } else if (Array.isArray(raw?.data?.portfolios)) {
+    list = raw.data.portfolios;
   } else if (Array.isArray(raw?.data?.portfolio)) {
     list = raw.data.portfolio;
   } else if (Array.isArray(raw?.data?.images)) {
@@ -394,6 +871,20 @@ export function normalizePortfolioItems(raw: any, fallbackImages: string[] = [])
     list = raw.data.portfolioImages;
   } else if (Array.isArray(raw?.portfolioImages)) {
     list = raw.portfolioImages;
+  } else if (Array.isArray(raw?.data?.items)) {
+    list = raw.data.items;
+  } else if (Array.isArray(raw?.items)) {
+    list = raw.items;
+  } else if (Array.isArray(raw?.data?.portfolioItems)) {
+    list = raw.data.portfolioItems;
+  } else if (Array.isArray(raw?.portfolioItems)) {
+    list = raw.portfolioItems;
+  } else if (Array.isArray(raw?.data)) {
+    list = raw.data;
+  }
+
+  if (list === null) {
+    return fallbackImages;
   }
 
   const result: string[] = [];
@@ -401,13 +892,27 @@ export function normalizePortfolioItems(raw: any, fallbackImages: string[] = [])
     if (typeof item === 'string' && item.trim()) {
       if (!result.includes(item.trim())) result.push(item.trim());
     } else if (item && typeof item === 'object') {
-      const url = item.imageUrl || item.url || item.image || item.src;
+      const url =
+        item.imageUrl ||
+        item.image_url ||
+        item.url ||
+        item.image ||
+        item.src ||
+        item.media_url ||
+        item.mediaUrl ||
+        item.photo ||
+        item.photo_url ||
+        item.fileUrl ||
+        item.file_url ||
+        item.portfolio_url ||
+        item.portfolioUrl ||
+        item.path;
       if (typeof url === 'string' && url.trim()) {
         if (!result.includes(url.trim())) result.push(url.trim());
       }
     }
   }
-  return result.length > 0 ? result : fallbackImages;
+  return result;
 }
 
 /**
@@ -442,16 +947,31 @@ export function normalizeServicePackages(raw: any, fallbackPackages: any[] = [])
         item._id ||
         item.packageId ||
         `pkg_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
-      const name = item.name || item.title || item.packageName || 'Service Tier';
-      const price = Number(item.price || item.startingPrice || item.rate || 25000);
-      const description = item.description || item.about || 'Professional service tier delivery.';
+      const name = item.name || item.title || item.packageName || 'Service Package';
+      const rawPrice =
+        item.price !== undefined && item.price !== null
+          ? item.price
+          : item.startingPrice !== undefined && item.startingPrice !== null
+            ? item.startingPrice
+            : item.starting_price !== undefined && item.starting_price !== null
+              ? item.starting_price
+              : item.rate !== undefined && item.rate !== null
+                ? item.rate
+                : item.basePrice !== undefined && item.basePrice !== null
+                  ? item.basePrice
+                  : item.base_price;
+      const price =
+        rawPrice !== undefined && rawPrice !== null && rawPrice !== '' && !isNaN(Number(rawPrice))
+          ? Number(rawPrice)
+          : 0;
+      const description = item.description || item.about || '';
       const features = Array.isArray(item.features)
         ? item.features
         : Array.isArray(item.services)
-        ? item.services
-        : typeof item.features === 'string'
-        ? item.features.split(',').map((s: string) => s.trim()).filter(Boolean)
-        : [];
+          ? item.services
+          : typeof item.features === 'string'
+            ? item.features.split(',').map((s: string) => s.trim()).filter(Boolean)
+            : [];
 
       result.push({
         id,
@@ -501,27 +1021,87 @@ export async function fetchAndCacheProviderProfile(providerId?: string): Promise
 }
 
 /**
- * Returns all providers formatted for customer-side discovery and details,
- * seamlessly merging live modifications from registered providers (localStorage).
+ * Maps a normalized ProviderAccount into the customer-facing Provider model.
+ */
+export function mapProviderAccountToDisplayProvider(account: ProviderAccount): Provider {
+  const portImages = account.categoryData?.portfolioImages || [];
+  const imagesList = account.profileImage
+    ? [account.profileImage, ...portImages.filter((img) => img !== account.profileImage)]
+    : portImages.length > 0
+      ? portImages
+      : [];
+
+  const rawStarting =
+    account.startingPrice !== undefined && account.startingPrice !== null && account.startingPrice !== '' && !isNaN(Number(account.startingPrice))
+      ? Number(account.startingPrice)
+      : (account.categoryData?.packageInfo && account.categoryData.packageInfo.length > 0
+        ? Math.min(...account.categoryData.packageInfo.map((p) => Number(p.price) || 0))
+        : 0);
+
+  const yearsExp =
+    account.yearsExperience !== undefined && account.yearsExperience !== null && account.yearsExperience !== '' && !isNaN(Number(account.yearsExperience))
+      ? Number(account.yearsExperience)
+      : 0;
+
+  const actualPackages =
+    account.categoryData?.packageInfo && account.categoryData.packageInfo.length > 0
+      ? account.categoryData.packageInfo.map((pkg) => ({
+        id: pkg.id,
+        name: pkg.name || 'Service Package',
+        price: Number(pkg.price) || 0,
+        description: pkg.description || '',
+        features:
+          pkg.features && pkg.features.length > 0
+            ? pkg.features
+            : [],
+      }))
+      : [];
+
+  return {
+    id: account.id,
+    name: account.businessName || account.fullName || 'Service Provider',
+    category: account.category || 'General Service',
+    location: account.location || '',
+    rating: 5.0,
+    reviewCount: 1,
+    startingPrice: rawStarting,
+    yearsExperience: yearsExp,
+    description: account.description || '',
+    about: account.description || '',
+    services:
+      account.categoryData?.servicesOffered && account.categoryData.servicesOffered.length > 0
+        ? account.categoryData.servicesOffered
+        : ['Signature Event Services'],
+    tags: [account.category || 'Service', 'Verified Partner'],
+    images: imagesList,
+    priceRange: rawStarting > 0 ? `₹${rawStarting.toLocaleString('en-IN')}+` : 'Contact for pricing',
+    available: true,
+    packages: actualPackages,
+    contactDemo: {
+      manager: account.fullName || account.businessName || 'Partner Manager',
+      phone: account.phone || '',
+      email: account.email || '',
+      address: account.location ? `${account.location}, India` : 'India',
+      hours: 'Mon - Sun: 9:00 AM - 8:00 PM',
+    },
+  };
+}
+
+/**
+ * Returns all approved, active providers formatted for customer-side discovery and details.
+ * Strictly avoids mock provider fallbacks.
  */
 export function getAllDisplayProviders(): Provider[] {
   const registered = getRegisteredProviders();
-  const regMap = new Map<string, ProviderAccount>();
-  registered.forEach((r) => regMap.set(r.id, r));
-
   const result: Provider[] = [];
-  const processedIds = new Set<string>();
+  const seenIds = new Set<string>();
 
-  // Process mock providers with live overrides
-  for (const base of MOCK_PROVIDERS) {
-    processedIds.add(base.id);
-    const reg = regMap.get(base.id);
-    if (!reg) {
-      result.push(base);
+  for (const reg of registered) {
+    if (!reg || !reg.id || seenIds.has(reg.id)) {
       continue;
     }
 
-    // Respect backend approval status: pending, rejected, or suspended providers are hidden from public discovery
+    // Respect backend approval status
     if (
       reg.approvalStatus &&
       ['PENDING', 'REJECTED', 'SUSPENDED'].includes(reg.approvalStatus.toUpperCase())
@@ -529,190 +1109,128 @@ export function getAllDisplayProviders(): Provider[] {
       continue;
     }
 
-    const regImages = reg.categoryData?.portfolioImages;
-    const combinedImages: string[] = [];
-    if (reg.profileImage) combinedImages.push(reg.profileImage);
-    if (regImages && regImages.length > 0) {
-      regImages.forEach((img) => {
-        if (!combinedImages.includes(img)) combinedImages.push(img);
-      });
+    // Respect backend active/inactive state
+    if (
+      (reg as any).isActive === false ||
+      (reg as any).is_active === false ||
+      (reg as any).status === 'inactive' ||
+      (reg as any).status === 'suspended'
+    ) {
+      continue;
     }
 
-    result.push({
-      ...base,
-      name: reg.businessName || reg.fullName || base.name,
-      location: reg.location || base.location,
-      startingPrice: Number(reg.startingPrice) || base.startingPrice,
-      yearsExperience: Number(reg.yearsExperience) || base.yearsExperience,
-      description: reg.description || base.description,
-      about: reg.description || base.about,
-      category: reg.category || base.category,
-      images: combinedImages.length > 0 ? combinedImages : base.images,
-      priceRange: `₹${(Number(reg.startingPrice) || base.startingPrice).toLocaleString('en-IN')}+`,
-      packages:
-        reg.categoryData?.packageInfo && reg.categoryData.packageInfo.length > 0
-          ? reg.categoryData.packageInfo.map((pkg) => ({
-              name: pkg.name,
-              price: Number(pkg.price),
-              description: pkg.description,
-              features: pkg.features && pkg.features.length > 0 ? pkg.features : ['Core consultation & execution'],
-            }))
-          : base.packages,
-      services:
-        reg.categoryData?.servicesOffered && reg.categoryData.servicesOffered.length > 0
-          ? reg.categoryData.servicesOffered
-          : base.services,
-      contactDemo: {
-        manager: reg.fullName || base.contactDemo.manager,
-        phone: reg.phone || base.contactDemo.phone,
-        email: reg.email || base.contactDemo.email,
-        address: base.contactDemo.address,
-        hours: base.contactDemo.hours,
-      },
-    });
-  }
-
-  // Include any newly signed-up providers not in mock list
-  for (const reg of registered) {
-    if (!processedIds.has(reg.id)) {
-      // Respect backend approval status
-      if (
-        reg.approvalStatus &&
-        ['PENDING', 'REJECTED', 'SUSPENDED'].includes(reg.approvalStatus.toUpperCase())
-      ) {
-        continue;
-      }
-
-      const portImages = reg.categoryData?.portfolioImages || [];
-      const imagesList = reg.profileImage
-        ? [reg.profileImage, ...portImages.filter((img) => img !== reg.profileImage)]
-        : portImages.length > 0
-        ? portImages
-        : ['https://images.unsplash.com/photo-1519741497674-611481863552?auto=format&fit=crop&w=800&q=80'];
-
-      result.push({
-        id: reg.id,
-        name: reg.businessName || reg.fullName,
-        category: reg.category,
-        location: reg.location || 'Kerala',
-        rating: 5.0,
-        reviewCount: 1,
-        startingPrice: Number(reg.startingPrice) || 25000,
-        yearsExperience: Number(reg.yearsExperience) || 3,
-        description: reg.description,
-        about: reg.description,
-        services: reg.categoryData?.servicesOffered || ['Signature Event Services'],
-        tags: [reg.category, 'Verified Partner'],
-        images: imagesList,
-        priceRange: `₹${(Number(reg.startingPrice) || 25000).toLocaleString('en-IN')}+`,
-        available: true,
-        packages: (reg.categoryData?.packageInfo || []).map((pkg) => ({
-          name: pkg.name,
-          price: Number(pkg.price),
-          description: pkg.description,
-          features: pkg.features && pkg.features.length > 0 ? pkg.features : ['Dedicated consultation & execution'],
-        })),
-        contactDemo: {
-          manager: reg.fullName,
-          phone: reg.phone,
-          email: reg.email,
-          address: `${reg.location || 'Kochi'}, Kerala`,
-          hours: 'Mon - Sun: 9:00 AM - 8:00 PM',
-        },
-      });
-    }
+    seenIds.add(reg.id);
+    result.push(mapProviderAccountToDisplayProvider(reg));
   }
 
   return result;
 }
 
 /**
- * Returns a single unified Provider for ProviderDetailsPage,
- * merging registered updates and returning raw categoryData.
+ * Returns a single unified Provider for ProviderDetailsPage.
+ * Strictly respects backend approval status and active state.
  */
-export function getDisplayProvider(providerId: string): { provider: Provider; account: ProviderAccount | null } | null {
+export function getDisplayProvider(
+  providerId: string
+): { provider: Provider; account: ProviderAccount | null } | null {
+  if (!providerId) return null;
   const account = getProviderProfile(providerId);
-  const all = getAllDisplayProviders();
-  const found = all.find((p) => p.id === providerId);
-  if (found) {
-    return { provider: found, account };
-  }
-  if (account) {
-    const portImages = account.categoryData?.portfolioImages || [];
-    const imagesList = account.profileImage
-      ? [account.profileImage, ...portImages.filter((img) => img !== account.profileImage)]
-      : portImages.length > 0
-      ? portImages
-      : ['https://images.unsplash.com/photo-1519741497674-611481863552?auto=format&fit=crop&w=800&q=80'];
+  if (!account) return null;
 
-    return {
-      provider: {
-        id: account.id,
-        name: account.businessName || account.fullName,
-        category: account.category,
-        location: account.location || 'Kerala',
-        rating: 5.0,
-        reviewCount: 1,
-        startingPrice: Number(account.startingPrice) || 25000,
-        yearsExperience: Number(account.yearsExperience) || 3,
-        description: account.description,
-        about: account.description,
-        services: account.categoryData?.servicesOffered || ['Signature Event Services'],
-        tags: [account.category, 'Verified Partner'],
-        images: imagesList,
-        priceRange: `₹${(Number(account.startingPrice) || 25000).toLocaleString('en-IN')}+`,
-        available: true,
-        packages: (account.categoryData?.packageInfo || []).map((pkg) => ({
-          name: pkg.name,
-          price: Number(pkg.price),
-          description: pkg.description,
-          features: pkg.features && pkg.features.length > 0 ? pkg.features : ['Dedicated consultation & execution'],
-        })),
-        contactDemo: {
-          manager: account.fullName,
-          phone: account.phone,
-          email: account.email,
-          address: `${account.location || 'Kochi'}, Kerala`,
-          hours: 'Mon - Sun: 9:00 AM - 8:00 PM',
-        },
-      },
-      account,
-    };
+  // Respect backend approval status
+  if (
+    account.approvalStatus &&
+    ['PENDING', 'REJECTED', 'SUSPENDED'].includes(account.approvalStatus.toUpperCase())
+  ) {
+    return null;
   }
-  return null;
+
+  // Respect backend active state
+  if (
+    (account as any).isActive === false ||
+    (account as any).is_active === false ||
+    (account as any).status === 'inactive' ||
+    (account as any).status === 'suspended'
+  ) {
+    return null;
+  }
+
+  return {
+    provider: mapProviderAccountToDisplayProvider(account),
+    account,
+  };
 }
 
 /**
- * Authoritatively fetches providers list from backend GET /providers and refreshes local cache
+ * Authoritatively fetches providers list from backend GET /providers and refreshes local cache.
+ * Fresh backend response replaces the cached provider list rather than merging with mock data.
  */
 export async function fetchAndCacheAllProviders(): Promise<Provider[]> {
   try {
     const res: any = await providersApi.getAll();
-    const rawList: any[] = Array.isArray(res?.data)
-      ? res.data
-      : Array.isArray(res?.providers)
-      ? res.providers
-      : Array.isArray(res)
-      ? res
-      : [];
+    const rawList: any[] = Array.isArray(res?.data?.providers)
+      ? res.data.providers
+      : Array.isArray(res?.data)
+        ? res.data
+        : Array.isArray(res?.providers)
+          ? res.providers
+          : Array.isArray(res)
+            ? res
+            : [];
 
-    if (rawList.length > 0) {
-      for (const item of rawList) {
-        if (item && typeof item === 'object') {
-          const id = item.id || item._id || item.providerId;
-          if (id) {
-            const normalized = normalizeBackendProviderProfile(item, getProviderProfile(id));
-            if (normalized) {
-              saveProviderAccount(normalized);
-            }
-          }
+    const normalizedAccounts: ProviderAccount[] = [];
+    const displayProviders: Provider[] = [];
+    const seenIds = new Set<string>();
+
+    for (const item of rawList) {
+      if (item && typeof item === 'object') {
+        const id = item.id || item._id || item.providerId;
+        if (!id || seenIds.has(id)) continue;
+
+        // Respect approval status
+        const approvalStatus = (
+          item.approvalStatus ||
+          item.approval_status ||
+          item.status ||
+          'APPROVED'
+        ).toUpperCase();
+        if (['PENDING', 'REJECTED', 'SUSPENDED'].includes(approvalStatus)) {
+          continue;
+        }
+
+        // Respect active/inactive state
+        if (
+          item.isActive === false ||
+          item.is_active === false ||
+          item.status === 'inactive' ||
+          item.status === 'suspended'
+        ) {
+          continue;
+        }
+
+        const existing = id ? getProviderProfile(id) : null;
+        const normalized = normalizeBackendProviderProfile(item, existing);
+        if (normalized && normalized.id && !seenIds.has(normalized.id)) {
+          seenIds.add(normalized.id);
+          normalizedAccounts.push(normalized);
+          displayProviders.push(mapProviderAccountToDisplayProvider(normalized));
         }
       }
     }
+
+    // Fresh backend response replaces the cached provider list
+    try {
+      localStorage.setItem(PROVIDERS_KEY, JSON.stringify(normalizedAccounts));
+    } catch (e) {
+      console.warn('Failed to update provider cache in localStorage:', e);
+    }
+
+    return displayProviders;
   } catch (err) {
     console.warn('Failed fetching backend providers list:', err);
+    // Offline/fallback cache read only if network/API fails
+    return getAllDisplayProviders();
   }
-  return getAllDisplayProviders();
 }
 
 /**
@@ -725,11 +1243,12 @@ export async function fetchAndCacheProviderDetails(
 
   try {
     const res: any = await providersApi.getById(providerId);
-    const item = res?.data?.provider || res?.data || res?.provider || res;
-    if (item && typeof item === 'object') {
-      const normalized = normalizeBackendProviderProfile(item, getProviderProfile(providerId));
+    if (res && typeof res === 'object') {
+      const normalized = normalizeBackendProviderProfile(res, getProviderProfile(providerId));
       if (normalized) {
         saveProviderAccount(normalized);
+        const display = mapProviderAccountToDisplayProvider(normalized);
+        return { provider: display, account: normalized };
       }
     }
   } catch (err) {
@@ -850,18 +1369,79 @@ export async function verifyProviderSession(): Promise<VerifyProviderSessionResu
         return { valid: false, error: 'ACCOUNT_DEACTIVATED' };
       }
 
-      const backendId = user.id || user._id || user.userId || user.providerId || currentSession?.providerId || '';
+      const providerProfileId =
+        user.providerProfile?.id ||
+        user.provider?.id ||
+        user.profile?.id ||
+        user.providerProfileId ||
+        user.provider_profile_id ||
+        res?.data?.providerProfile?.id ||
+        res?.data?.provider?.id ||
+        res?.data?.profile?.id ||
+        null;
+
+      const backendUserId =
+        user.id ||
+        user._id ||
+        user.userId ||
+        currentSession?.userId ||
+        '';
+
+      const backendId =
+        providerProfileId ||
+        (currentSession?.providerId && currentSession.providerId !== currentSession.userId ? currentSession.providerId : null) ||
+        backendUserId ||
+        '';
+
       const fullName = user.fullName || user.name || currentSession?.fullName || '';
       const businessName = user.businessName || user.companyName || currentSession?.businessName || fullName;
       const email = user.email || currentSession?.email || '';
-      const category = (user.category as ProviderCategoryType) || currentSession?.category || 'Photographer';
+
+      const rawUserCat =
+        extractCategoryString(user.providerProfile?.category) ||
+        extractCategoryString(user.providerProfile?.serviceCategory) ||
+        extractCategoryString(user.provider_profile?.category) ||
+        extractCategoryString(user.provider_profile?.service_category) ||
+        extractCategoryString(user.provider?.category) ||
+        extractCategoryString(user.provider?.serviceCategory) ||
+        extractCategoryString(user.profile?.category) ||
+        extractCategoryString(user.profile?.serviceCategory) ||
+        extractCategoryString(res?.data?.providerProfile?.category) ||
+        extractCategoryString(res?.data?.provider_profile?.category) ||
+        extractCategoryString(res?.data?.provider?.category) ||
+        extractCategoryString(res?.data?.provider?.serviceCategory) ||
+        extractCategoryString(res?.data?.profile?.category) ||
+        extractCategoryString(res?.data?.category) ||
+        extractCategoryString(res?.data?.serviceCategory) ||
+        extractCategoryString(res?.data?.user?.category) ||
+        extractCategoryString(res?.data?.user?.serviceCategory) ||
+        extractCategoryString(res?.data?.user?.providerProfile?.category) ||
+        extractCategoryString(res?.data?.user?.provider_profile?.category) ||
+        extractCategoryString(user.category) ||
+        extractCategoryString(user.serviceCategory) ||
+        extractCategoryString(user.service_category) ||
+        extractCategoryString(user.providerCategory) ||
+        extractCategoryString(user.provider_category) ||
+        extractCategoryString(user.categoryName) ||
+        extractCategoryString(user.category_name);
+
+      const existingAccount = (backendId ? getProviderProfile(backendId) : null) || (email ? getProviderProfile(email) : null);
+      const normalizedCat = normalizeProviderCategory(rawUserCat);
+      const fallbackCat = existingAccount?.category ? normalizeProviderCategory(existingAccount.category) : '';
+      const sessionCat = currentSession?.category && currentSession.providerId === backendId ? normalizeProviderCategory(currentSession.category) : '';
+      const category: ProviderCategoryType =
+        (normalizedCat as ProviderCategoryType) ||
+        (fallbackCat as ProviderCategoryType) ||
+        (sessionCat as ProviderCategoryType) ||
+        (rawUserCat ? (rawUserCat as ProviderCategoryType) : ('' as ProviderCategoryType));
+
       const profileImage = user.profileImage || user.avatar || currentSession?.profileImage;
 
       // Update provider session with backend data (never store password)
       const latestToken = getStoredAccessToken() || token;
       const updatedSession: ProviderSession = {
         providerId: backendId,
-        userId: backendId,
+        userId: backendUserId || undefined,
         businessName,
         fullName,
         email,
@@ -874,9 +1454,9 @@ export async function verifyProviderSession(): Promise<VerifyProviderSessionResu
       setProviderSession(updatedSession);
 
       // Rehydrate local provider profile cache
-      const existingAccount = backendId ? getProviderProfile(backendId) : null;
       const normalized = normalizeBackendProviderProfile(user, existingAccount);
       if (normalized) {
+        normalized.category = category;
         saveProviderAccount(normalized);
       }
 
@@ -944,10 +1524,10 @@ export async function loginProvider(
       res?.data?.user && typeof res.data.user === 'object'
         ? res.data.user
         : res?.user && typeof res.user === 'object'
-        ? res.user
-        : res?.data && typeof res.data === 'object' && ('id' in res.data || 'email' in res.data)
-        ? res.data
-        : null;
+          ? res.user
+          : res?.data && typeof res.data === 'object' && ('id' in res.data || 'email' in res.data)
+            ? res.data
+            : null;
 
     // Role check: must be provider
     const role = backendUser?.role || res?.data?.role;
@@ -970,14 +1550,74 @@ export async function loginProvider(
     if (accessToken) setStoredAccessToken(accessToken);
     if (refreshToken) setStoredRefreshToken(refreshToken);
 
-    const backendUserId = backendUser?.id || backendUser?._id || backendUser?.userId || backendUser?.providerId || '';
+    const providerProfileId =
+      backendUser?.providerProfile?.id ||
+      backendUser?.provider?.id ||
+      backendUser?.profile?.id ||
+      backendUser?.providerProfileId ||
+      backendUser?.provider_profile_id ||
+      res?.data?.providerProfile?.id ||
+      res?.data?.provider?.id ||
+      res?.data?.profile?.id ||
+      res?.data?.user?.providerProfile?.id ||
+      null;
+
+    const backendUserId =
+      backendUser?.id ||
+      backendUser?._id ||
+      backendUser?.userId ||
+      '';
+
+    const existing = (providerProfileId ? getProviderProfile(providerProfileId) : null) || (backendUserId ? getProviderProfile(backendUserId) : null) || getProviderProfile(cleanEmail);
+
+    const resolvedProviderId =
+      providerProfileId ||
+      backendUserId ||
+      existing?.id ||
+      `prov_${Date.now().toString(36)}`;
+
     const fullName = backendUser?.fullName || backendUser?.name || cleanEmail.split('@')[0];
     const businessName = backendUser?.businessName || backendUser?.companyName || fullName;
-    const category = (backendUser?.category as ProviderCategoryType) || 'Photographer';
+
+    const rawLoginCat =
+      extractCategoryString(backendUser?.providerProfile?.category) ||
+      extractCategoryString(backendUser?.providerProfile?.serviceCategory) ||
+      extractCategoryString(backendUser?.provider_profile?.category) ||
+      extractCategoryString(backendUser?.provider_profile?.service_category) ||
+      extractCategoryString(backendUser?.provider?.category) ||
+      extractCategoryString(backendUser?.provider?.serviceCategory) ||
+      extractCategoryString(backendUser?.profile?.category) ||
+      extractCategoryString(backendUser?.profile?.serviceCategory) ||
+      extractCategoryString(res?.data?.providerProfile?.category) ||
+      extractCategoryString(res?.data?.provider_profile?.category) ||
+      extractCategoryString(res?.data?.provider?.category) ||
+      extractCategoryString(res?.data?.provider?.serviceCategory) ||
+      extractCategoryString(res?.data?.profile?.category) ||
+      extractCategoryString(res?.data?.category) ||
+      extractCategoryString(res?.data?.serviceCategory) ||
+      extractCategoryString(res?.data?.user?.category) ||
+      extractCategoryString(res?.data?.user?.serviceCategory) ||
+      extractCategoryString(res?.data?.user?.providerProfile?.category) ||
+      extractCategoryString(res?.data?.user?.provider_profile?.category) ||
+      extractCategoryString(backendUser?.category) ||
+      extractCategoryString(backendUser?.serviceCategory) ||
+      extractCategoryString(backendUser?.service_category) ||
+      extractCategoryString(backendUser?.providerCategory) ||
+      extractCategoryString(backendUser?.provider_category) ||
+      extractCategoryString(backendUser?.categoryName) ||
+      extractCategoryString(backendUser?.category_name);
+
+    const normalizedLoginCat = normalizeProviderCategory(rawLoginCat);
+    const fallbackCat = existing?.category ? normalizeProviderCategory(existing.category) : '';
+    const category: ProviderCategoryType =
+      (normalizedLoginCat as ProviderCategoryType) ||
+      (fallbackCat as ProviderCategoryType) ||
+      (rawLoginCat ? (rawLoginCat as ProviderCategoryType) : ('' as ProviderCategoryType));
+
     const profileImage = backendUser?.profileImage || backendUser?.avatar;
 
     const session: ProviderSession = {
-      providerId: backendUserId || `prov_${Date.now().toString(36)}`,
+      providerId: resolvedProviderId,
       userId: backendUserId || undefined,
       businessName,
       fullName,
@@ -992,9 +1632,9 @@ export async function loginProvider(
     setProviderSession(session);
 
     // Save/update cached provider account without password
-    const existing = backendUserId ? getProviderProfile(backendUserId) : null;
-    const normalized = normalizeBackendProviderProfile(backendUser || res?.data, existing);
+    const normalized = normalizeBackendProviderProfile(res, existing);
     if (normalized) {
+      normalized.category = category;
       saveProviderAccount(normalized);
     }
 
@@ -1247,6 +1887,11 @@ export function updateBookingStatus(bookingId: string, status: BookingStatus): b
           detail: { bookingId, status, providerId: parsed[index].providerId },
         })
       );
+      window.dispatchEvent(
+        new CustomEvent('eva_ai_provider_availability_updated', {
+          detail: { providerId: parsed[index].providerId },
+        })
+      );
       window.dispatchEvent(new Event('storage'));
       return true;
     }
@@ -1274,7 +1919,7 @@ export function seedDemoBookingIfEmpty(providerId: string, providerName: string,
           if (cust.phone) custPhone = cust.phone;
           if (cust.email) custEmail = cust.email;
         }
-      } catch {}
+      } catch { }
 
       const demoBooking: Booking = {
         bookingId: `demo-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 6)}`,

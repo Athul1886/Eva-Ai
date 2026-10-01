@@ -254,7 +254,6 @@ export const ReviewStep: React.FC<ReviewStepProps> = ({
           className="px-9 py-4 rounded-xl bg-primary hover:bg-tertiary text-on-primary font-title-md font-bold transition-all shadow-[0_0_24px_rgba(242,202,80,0.3)] hover:shadow-[0_0_34px_rgba(242,202,80,0.5)] flex items-center justify-center gap-2.5 disabled:opacity-50 disabled:cursor-not-allowed"
         >
           <span>Create Event Plan</span>
-          <Icon name="sparkles" className="text-[20px]" />
         </button>
       </div>
     </div>

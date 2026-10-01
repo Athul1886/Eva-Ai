@@ -10,11 +10,12 @@ import { getStoredAccessToken, getStoredRefreshToken } from '../../api/api';
 
 export const CustomerLayout: React.FC = () => {
   const location = useLocation();
-  const [session, setSession] = useState<CustomerSession | null>(getCustomerSession());
+  const initialSession = getCustomerSession();
+  const [session, setSession] = useState<CustomerSession | null>(initialSession);
 
-  // Determine if we need to verify session on initial mount
+  // Only block initial render if we have NO cached session but have tokens to resolve
   const hasTokens = Boolean(getStoredAccessToken() || getStoredRefreshToken());
-  const [isVerifying, setIsVerifying] = useState<boolean>(hasTokens);
+  const [isVerifying, setIsVerifying] = useState<boolean>(!initialSession && hasTokens);
 
   // 1. Verify and rehydrate backend session once on mount if tokens exist
   useEffect(() => {
@@ -57,8 +58,8 @@ export const CustomerLayout: React.FC = () => {
     setSession(getCustomerSession());
   }, [location.pathname]);
 
-  // Loading state during initial verification to avoid flash of content
-  if (isVerifying) {
+  // Loading state ONLY during cold auth recovery when no cached session exists
+  if (isVerifying && !session) {
     return (
       <div className="bg-surface font-body-md text-on-surface antialiased min-h-screen flex items-center justify-center">
         <div className="flex flex-col items-center gap-3">

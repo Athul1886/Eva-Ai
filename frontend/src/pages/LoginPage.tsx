@@ -88,11 +88,17 @@ export const LoginPage: React.FC = () => {
           </div>
 
           {/* New to Eva-Ai Register Link */}
-          <div className="text-center mt-12">
+          <div className="text-center mt-12 space-y-2">
             <p className="font-body-md text-body-md text-on-surface-variant">
               Don&apos;t have an account yet?{' '}
               <Link className="text-primary font-semibold hover:underline transition-colors" to="/signup">
                 Create Account
+              </Link>
+            </p>
+            <p className="text-label-sm text-on-surface-variant/70">
+              Authorized personnel?{' '}
+              <Link className="text-on-surface-variant hover:text-primary transition-colors underline" to="/admin/login">
+                Admin Control Center
               </Link>
             </p>
           </div>

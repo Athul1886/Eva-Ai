@@ -17,6 +17,8 @@ import ProviderDetailsPage from './pages/ProviderDetailsPage';
 import EventPlanPage from './pages/EventPlanPage';
 import MyBookingsPage from './pages/MyBookingsPage';
 import CustomerProfilePage from './pages/CustomerProfilePage';
+import CustomerInvitationPage from './pages/CustomerInvitationPage';
+import PublicInvitationPage from './pages/PublicInvitationPage';
 
 // Provider Protected Experience
 import ProviderLayout from './components/provider/ProviderLayout';
@@ -25,6 +27,15 @@ import ProviderBookingsPage from './pages/ProviderBookingsPage';
 import ProviderSchedulePage from './pages/ProviderSchedulePage';
 import ProviderProfilePage from './pages/ProviderProfilePage';
 import ProviderPortfolioPage from './pages/ProviderPortfolioPage';
+
+// Admin Protected Experience & Auth
+import AdminLayout from './components/admin/AdminLayout';
+import AdminLoginPage from './pages/AdminLoginPage';
+import AdminDashboardPage from './pages/AdminDashboardPage';
+import AdminUsersPage from './pages/AdminUsersPage';
+import AdminProvidersPage from './pages/AdminProvidersPage';
+import AdminProviderDetailPage from './pages/AdminProviderDetailPage';
+
 import { ThemeProvider } from './context/ThemeContext';
 
 function ScrollToTop() {
@@ -59,6 +70,9 @@ export function App() {
         <Route path="/login/customer" element={<CustomerLoginPage />} />
         <Route path="/login/provider" element={<ProviderLoginPage />} />
 
+        {/* Admin Authentication */}
+        <Route path="/admin/login" element={<AdminLoginPage />} />
+
         {/* Event Planning Onboarding Workflow */}
         <Route path="/onboarding/event" element={<EventOnboardingPage />} />
 
@@ -70,9 +84,13 @@ export function App() {
           <Route path="services/:providerId" element={<ProviderDetailsPage />} />
           <Route path="provider/:providerId" element={<ProviderDetailsPage />} />
           <Route path="event-plan" element={<EventPlanPage />} />
+          <Route path="invitation" element={<CustomerInvitationPage />} />
           <Route path="bookings" element={<MyBookingsPage />} />
           <Route path="profile" element={<CustomerProfilePage />} />
         </Route>
+
+        {/* Public Digital Guest Invitation & RSVP Pass */}
+        <Route path="/invitation/:publicToken" element={<PublicInvitationPage />} />
 
         {/* Provider Atelier Management Portal (Protected by ProviderLayout) */}
         <Route path="/provider" element={<ProviderLayout />}>
@@ -82,6 +100,15 @@ export function App() {
           <Route path="schedule" element={<ProviderSchedulePage />} />
           <Route path="profile" element={<ProviderProfilePage />} />
           <Route path="portfolio" element={<ProviderPortfolioPage />} />
+        </Route>
+
+        {/* Admin Atelier Control Center (Protected by AdminLayout) */}
+        <Route path="/admin" element={<AdminLayout />}>
+          <Route index element={<Navigate to="/admin/dashboard" replace />} />
+          <Route path="dashboard" element={<AdminDashboardPage />} />
+          <Route path="users" element={<AdminUsersPage />} />
+          <Route path="providers" element={<AdminProvidersPage />} />
+          <Route path="providers/:id" element={<AdminProviderDetailPage />} />
         </Route>
 
         {/* Catch-all fallback */}

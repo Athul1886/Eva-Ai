@@ -8,7 +8,9 @@ import { bookingsApi, ApiError } from '../api/api';
 
 export const ProviderDashboardPage: React.FC = () => {
   const { session } = useOutletContext<{ session: ProviderSession }>();
-  const [bookings, setBookings] = useState<Booking[]>([]);
+  const [bookings, setBookings] = useState<Booking[]>(() => {
+    return session?.providerId ? getProviderBookings(session.providerId) : [];
+  });
   const [selectedBooking, setSelectedBooking] = useState<Booking | null>(null);
   const [statusActionToast, setStatusActionToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(false);
@@ -169,6 +171,11 @@ export const ProviderDashboardPage: React.FC = () => {
       window.dispatchEvent(
         new CustomEvent('eva_ai_bookings_updated', {
           detail: { bookingId, status: newStatus, providerId: session?.providerId },
+        })
+      );
+      window.dispatchEvent(
+        new CustomEvent('eva_ai_provider_availability_updated', {
+          detail: { providerId: session?.providerId },
         })
       );
       window.dispatchEvent(new Event('storage'));

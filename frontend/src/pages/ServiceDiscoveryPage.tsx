@@ -7,16 +7,47 @@ import ProviderFilters from '../components/services/ProviderFilters';
 import ProviderCard from '../components/services/ProviderCard';
 import EventPlanSummary from '../components/services/EventPlanSummary';
 import EvaAiAssistant from '../components/services/EvaAiAssistant';
-import { PRICE_RANGES, SERVICE_CATEGORIES } from '../data/mockProviders';
-import { EventPlanData } from '../types/event';
+import { PRICE_RANGES } from '../constants/filters';
+import { EventPlanData, extractEventData } from '../types/event';
 import { CustomerProfileData } from './CustomerSignupPage';
-import { Provider, SelectedServiceItem, ServiceFilterState } from '../types/service';
-import { isProviderAvailable, getAllDisplayProviders, fetchAndCacheAllProviders } from '../utils/providerAuth';
-import { eventsApi, getStoredAccessToken } from '../api/api';
+import { CategoryInfo, Provider, SelectedServiceItem, ServiceFilterState } from '../types/service';
+import { isProviderAvailable, getAllDisplayProviders, fetchAndCacheAllProviders, normalizeProviderCategory } from '../utils/providerAuth';
+import { getCustomerSession } from '../utils/customerAuth';
+import { providersApi, eventsApi, getStoredAccessToken } from '../api/api';
+
+function matchesCategoryFilter(providerCategory?: string, filterKey?: string): boolean {
+  if (!filterKey || filterKey.toLowerCase() === 'all') return true;
+  if (!providerCategory) return false;
+  const p = providerCategory.toLowerCase().trim();
+  const f = filterKey.toLowerCase().trim();
+  if (p === f) return true;
+
+  const normP = normalizeProviderCategory(providerCategory);
+  const normF = normalizeProviderCategory(filterKey);
+  if (normP && normF && normP.toLowerCase() === normF.toLowerCase()) return true;
+
+  return false;
+}
+
+function getCategoryIcon(name: string, slug?: string): string {
+  const lower = `${name || ''} ${slug || ''}`.toLowerCase();
+  if (lower.includes('photo') || lower.includes('camera')) return 'photo_camera';
+  if (lower.includes('event') || lower.includes('manage') || lower.includes('planner')) return 'groups';
+  if (lower.includes('makeup') || lower.includes('beauty') || lower.includes('bridal')) return 'brush';
+  if (lower.includes('venue') || lower.includes('auditorium') || lower.includes('hall')) return 'apartment';
+  if (lower.includes('cater') || lower.includes('food') || lower.includes('dining')) return 'restaurant';
+  if (lower.includes('decor') || lower.includes('stage') || lower.includes('flower')) return 'palette';
+  if (lower.includes('dj') || lower.includes('music') || lower.includes('entertain') || lower.includes('sound')) return 'music_note';
+  return 'category';
+}
 
 export const ServiceDiscoveryPage: React.FC = () => {
-  // 1. Providers state (merging mock and live registered providers)
+  // 1. Providers state (authoritatively loaded from backend)
   const [allProviders, setAllProviders] = useState<Provider[]>(() => getAllDisplayProviders());
+
+  // Dynamic backend categories state
+  const [categories, setCategories] = useState<CategoryInfo[]>([]);
+  const [, setIsLoadingCategories] = useState<boolean>(true);
 
   // 2. Stored event & customer state from localStorage
   const [eventPlan, setEventPlan] = useState<EventPlanData | null>(null);
@@ -41,13 +72,29 @@ export const ServiceDiscoveryPage: React.FC = () => {
 
   // Load localStorage on mount and sync from backend
   useEffect(() => {
+    const customerSession = getCustomerSession();
+    const custId = customerSession?.customerId || customerSession?.userId;
+    const token = getStoredAccessToken();
+
+    // 1. Check local cache with ownership validation
     try {
       const eventJson = localStorage.getItem('eva_ai_event');
       if (eventJson) {
-        setEventPlan(JSON.parse(eventJson));
+        const parsed = JSON.parse(eventJson);
+        const eventOwner = parsed?.customerId || parsed?.userId;
+        if (!custId || !eventOwner || eventOwner === custId) {
+          setEventPlan(parsed);
+        } else {
+          // Belongs to different customer -> discard immediately
+          localStorage.removeItem('eva_ai_event');
+          setEventPlan(null);
+        }
+      } else {
+        setEventPlan(null);
       }
     } catch (e) {
       console.warn('Failed to parse eva_ai_event from localStorage:', e);
+      setEventPlan(null);
     }
 
     try {
@@ -68,11 +115,95 @@ export const ServiceDiscoveryPage: React.FC = () => {
       console.warn('Failed to parse eva_ai_selected_services from localStorage:', e);
     }
 
+    // 2. Authoritative backend event fetch on mount
+    if (token) {
+      eventsApi
+        .getAll()
+        .then((res: any) => {
+          const rawData = res?.data;
+          const rawList =
+            rawData?.events ||
+            (Array.isArray(rawData) ? rawData : null) ||
+            (res as any)?.events ||
+            (Array.isArray(res) ? res : []);
+          const eventsList = Array.isArray(rawList) ? rawList : [];
+
+          if (eventsList.length > 0) {
+            const matchingEvents = custId
+              ? eventsList.filter((e: any) => {
+                  const owner = e.customerId || e.userId || e.customer_id || e.user_id;
+                  return !owner || owner === custId;
+                })
+              : eventsList;
+
+            const active =
+              matchingEvents.length > 0
+                ? matchingEvents[matchingEvents.length - 1]
+                : eventsList[eventsList.length - 1];
+
+            const backendEvent = extractEventData({ data: active });
+            if (backendEvent) {
+              setEventPlan(backendEvent);
+              localStorage.setItem('eva_ai_event', JSON.stringify(backendEvent));
+            } else {
+              setEventPlan(null);
+              localStorage.removeItem('eva_ai_event');
+            }
+          } else {
+            // Zero events returned by backend -> backend is authoritative source of truth
+            setEventPlan(null);
+            localStorage.removeItem('eva_ai_event');
+          }
+        })
+        .catch((err) => {
+          console.warn('Failed fetching events from backend in ServiceDiscoveryPage:', err);
+        });
+    }
+
+    // Authoritative backend categories fetch on mount
+    providersApi
+      .getCategories()
+      .then((res: any) => {
+        const raw = res?.categories || res?.data?.categories || res?.data || res;
+        if (Array.isArray(raw) && raw.length > 0) {
+          const mapped: CategoryInfo[] = [
+            {
+              id: 'all',
+              name: 'All Services' as any,
+              icon: 'apps',
+              description: 'Explore all verified professionals and luxury event services',
+              filterKey: 'all',
+            },
+            ...raw.map((cat: any) => {
+              const name = typeof cat === 'string' ? cat : cat.name;
+              const id = typeof cat === 'string' ? cat.toLowerCase().replace(/[^a-z0-9]+/g, '-') : (cat.id || cat.slug || cat.name);
+              const description = typeof cat === 'object' && cat.description ? cat.description : `Verified ${name} services for your celebration`;
+              const icon = typeof cat === 'object' && cat.icon_url ? cat.icon_url : getCategoryIcon(name, typeof cat === 'object' ? cat.slug : undefined);
+              return {
+                id,
+                name,
+                icon,
+                description,
+                filterKey: name,
+              };
+            }),
+          ];
+          setCategories(mapped);
+        } else {
+          setCategories([]);
+        }
+      })
+      .catch((err) => {
+        console.warn('Failed fetching provider categories from backend:', err);
+        setCategories([]);
+      })
+      .finally(() => {
+        setIsLoadingCategories(false);
+      });
+
     // Authoritative backend fetch on mount
     fetchAndCacheAllProviders().then((list) => {
-      if (list && list.length > 0) {
-        setAllProviders(list);
-      }
+      setAllProviders(list ?? []);
     });
 
     // Listen for live availability changes, provider profile changes, or storage
@@ -85,9 +216,7 @@ export const ServiceDiscoveryPage: React.FC = () => {
       } catch {}
       setAllProviders(getAllDisplayProviders());
       fetchAndCacheAllProviders().then((list) => {
-        if (list && list.length > 0) {
-          setAllProviders(list);
-        }
+        setAllProviders(list ?? []);
       });
     };
 
@@ -143,6 +272,7 @@ export const ServiceDiscoveryPage: React.FC = () => {
 
     try {
       let backendCartItemId: string | undefined = undefined;
+      let newItemServiceId: string | undefined = undefined;
       const token = getStoredAccessToken();
 
       if (token && eventPlan?.id) {
@@ -156,11 +286,15 @@ export const ServiceDiscoveryPage: React.FC = () => {
             imageUrl: provider.images[0],
           });
           backendCartItemId =
-            res?.data?.cartItemId ||
             res?.data?.id ||
-            res?.data?.serviceId ||
+            res?.service?.id ||
+            res?.data?.cartItemId ||
             (res as any)?.cartItemId ||
             (res as any)?.id;
+          const backendServiceId =
+            res?.data?.serviceId ||
+            res?.service?.serviceId;
+          newItemServiceId = backendServiceId;
         } catch (apiErr: any) {
           console.warn('Backend addService warning:', apiErr);
         }
@@ -168,6 +302,7 @@ export const ServiceDiscoveryPage: React.FC = () => {
 
       const newItem: SelectedServiceItem = {
         cartItemId: backendCartItemId,
+        serviceId: newItemServiceId,
         providerId: provider.id,
         providerName: provider.name,
         category: provider.category,
@@ -233,15 +368,15 @@ export const ServiceDiscoveryPage: React.FC = () => {
     const counts: Record<string, number> = {
       all: allProviders.length,
     };
-    SERVICE_CATEGORIES.forEach((cat) => {
+    categories.forEach((cat) => {
       if (cat.filterKey !== 'all') {
-        counts[cat.filterKey] = allProviders.filter(
-          (p) => p.category.toLowerCase() === cat.filterKey.toLowerCase()
+        counts[cat.filterKey] = allProviders.filter((p) =>
+          matchesCategoryFilter(p.category, cat.filterKey)
         ).length;
       }
     });
     return counts;
-  }, [allProviders]);
+  }, [allProviders, categories]);
 
   // Filter and sort providers
   const filteredProviders = useMemo(() => {
@@ -262,7 +397,7 @@ export const ServiceDiscoveryPage: React.FC = () => {
 
       // 2. Category Filter
       if (filters.category !== 'all') {
-        if (provider.category.toLowerCase() !== filters.category.toLowerCase()) {
+        if (!matchesCategoryFilter(provider.category, filters.category)) {
           return false;
         }
       }
@@ -311,7 +446,19 @@ export const ServiceDiscoveryPage: React.FC = () => {
       if (!a.featured && b.featured) return 1;
       return b.rating - a.rating;
     });
-  }, [filters]);
+  }, [allProviders, filters]);
+
+  // Dynamically derive unique locations from backend providers
+  const availableLocations = useMemo(() => {
+    const locSet = new Set<string>();
+    allProviders.forEach((p) => {
+      if (p.location && typeof p.location === 'string' && p.location.trim()) {
+        locSet.add(p.location.trim());
+      }
+    });
+    const sorted = Array.from(locSet).sort((a, b) => a.localeCompare(b));
+    return ['All Locations', ...sorted];
+  }, [allProviders]);
 
   const selectedIdsSet = useMemo(() => {
     return new Set(selectedServices.map((s) => s.providerId));
@@ -351,7 +498,12 @@ export const ServiceDiscoveryPage: React.FC = () => {
           </div>
 
           {/* C. Event Summary Card (Reads localStorage: eva_ai_event) */}
-          <EventSummaryCard eventPlan={eventPlan} />
+          <EventSummaryCard
+            eventPlan={eventPlan}
+            onBuildEventPlan={() => {
+              window.dispatchEvent(new CustomEvent('eva_ai_trigger_build_plan'));
+            }}
+          />
 
           {/* E. Service Category Navigation Cards */}
           <div className="space-y-4">
@@ -373,23 +525,27 @@ export const ServiceDiscoveryPage: React.FC = () => {
               )}
             </div>
 
-            <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-3">
-              {SERVICE_CATEGORIES.map((cat) => (
-                <ServiceCategoryCard
-                  key={cat.id}
-                  category={cat}
-                  isSelected={filters.category.toLowerCase() === cat.filterKey.toLowerCase()}
-                  providerCount={categoryCounts[cat.filterKey] || 0}
-                  onSelect={(filterKey) => handleFilterChange({ category: filterKey })}
-                />
-              ))}
-            </div>
+            {categories.length > 0 && (
+              <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-3">
+                {categories.map((cat) => (
+                  <ServiceCategoryCard
+                    key={cat.id}
+                    category={cat}
+                    isSelected={filters.category.toLowerCase() === cat.filterKey.toLowerCase()}
+                    providerCount={categoryCounts[cat.filterKey] || 0}
+                    onSelect={(filterKey) => handleFilterChange({ category: filterKey })}
+                  />
+                ))}
+              </div>
+            )}
           </div>
 
           {/* D & F. Search and Filter Controls */}
           <div className="space-y-6 pt-2">
             <ProviderFilters
               filters={filters}
+              categories={categories}
+              locations={availableLocations}
               onFilterChange={handleFilterChange}
               onResetFilters={handleResetFilters}
               totalResults={filteredProviders.length}

@@ -79,6 +79,12 @@ export const CustomerHeader: React.FC<CustomerHeaderProps> = ({ session: initial
       isActive: location.pathname === '/customer/event-plan',
     },
     {
+      to: '/customer/invitation',
+      label: 'My Invitation',
+      icon: 'mark_email_read',
+      isActive: location.pathname === '/customer/invitation',
+    },
+    {
       to: '/customer/bookings',
       label: 'My Bookings',
       icon: 'receipt_long',
@@ -202,6 +208,15 @@ export const CustomerHeader: React.FC<CustomerHeaderProps> = ({ session: initial
                   >
                     <Icon name="assignment" className="text-[18px] text-primary" />
                     <span>My Event Plan</span>
+                  </Link>
+
+                  <Link
+                    to="/customer/invitation"
+                    onClick={() => setDropdownOpen(false)}
+                    className="flex items-center gap-2.5 px-4 py-2.5 text-xs font-semibold text-on-surface hover:text-primary hover:bg-surface-bright/50 transition-colors"
+                  >
+                    <Icon name="mark_email_read" className="text-[18px] text-primary" />
+                    <span>My Invitation</span>
                   </Link>
 
                   <Link

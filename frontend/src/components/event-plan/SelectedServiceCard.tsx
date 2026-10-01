@@ -2,7 +2,6 @@ import React from 'react';
 import { Link } from 'react-router-dom';
 import Icon from '../common/Icon';
 import { SelectedServiceItem } from '../../types/service';
-import { MOCK_PROVIDERS } from '../../data/mockProviders';
 import { formatIndianRupees } from '../../types/event';
 
 interface SelectedServiceCardProps {
@@ -22,17 +21,22 @@ export const SelectedServiceCard: React.FC<SelectedServiceCardProps> = ({
   eventDate,
   onRemove,
 }) => {
-  // Enrich from mock provider data if available
-  const provider = MOCK_PROVIDERS.find((p) => p.id === service.providerId);
-
-  const displayName = provider?.name || service.providerName;
-  const displayCategory = provider?.category || service.category;
-  const displayLocation = provider?.location || service.location;
-  const displayPrice = provider?.startingPrice || service.startingPrice;
-  const displayImage = provider?.images?.[0] || service.imageUrl || 'https://images.unsplash.com/photo-1519741497674-611481863552?auto=format&fit=crop&w=800&q=80';
-  const displayDescription = provider?.description || 'Verified luxury event service partner for your celebration.';
-  const displayRating = provider?.rating;
-  const displayReviewCount = provider?.reviewCount;
+  const displayName = service.providerName || 'Service Provider';
+  const displayCategory = service.category || 'Event Service';
+  const displayLocation = service.location || 'Kerala';
+  const packageName =
+    service.packageName ||
+    (typeof service.packageDetails === 'object' && service.packageDetails?.name) ||
+    '';
+  const displayPrice =
+    (typeof service.packageDetails === 'object' && Number(service.packageDetails?.price)) ||
+    (service.price !== undefined && service.price > 0 ? service.price : service.startingPrice) ||
+    0;
+  const displayImage = service.imageUrl;
+  const displayDescription =
+    service.notes ||
+    (typeof service.packageDetails === 'object' && service.packageDetails?.description) ||
+    'Verified luxury event service partner for your celebration.';
 
   return (
     <div
@@ -45,13 +49,19 @@ export const SelectedServiceCard: React.FC<SelectedServiceCardProps> = ({
       {/* Left: Image & Details */}
       <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4 sm:gap-5 flex-1 w-full">
         {/* Thumbnail Image */}
-        <div className="relative w-full sm:w-28 sm:h-28 h-40 rounded-2xl overflow-hidden bg-surface-container flex-shrink-0 border border-surface-container-highest/50">
-          <img
-            src={displayImage}
-            alt={displayName}
-            className="w-full h-full object-cover object-center group-hover:scale-105 transition-transform duration-500"
-            loading="lazy"
-          />
+        <div className="relative w-full sm:w-28 sm:h-28 h-40 rounded-2xl overflow-hidden bg-surface-container flex-shrink-0 border border-surface-container-highest/50 flex items-center justify-center">
+          {displayImage ? (
+            <img
+              src={displayImage}
+              alt={displayName}
+              className="w-full h-full object-cover object-center group-hover:scale-105 transition-transform duration-500"
+              loading="lazy"
+            />
+          ) : (
+            <div className="flex flex-col items-center justify-center text-on-surface-variant/40 space-y-1">
+              <Icon name="storefront" className="text-3xl" />
+            </div>
+          )}
           <div className="absolute inset-0 bg-gradient-to-t from-surface-container-high/80 via-transparent to-transparent sm:hidden" />
           {isUnavailable && (
             <div className="absolute top-2 left-2 px-2 py-0.5 rounded-lg bg-error/90 text-on-error font-bold text-[10px] uppercase tracking-wider backdrop-blur-sm shadow-md flex items-center gap-1">
@@ -92,16 +102,10 @@ export const SelectedServiceCard: React.FC<SelectedServiceCardProps> = ({
             <h3 className="font-headline-sm text-lg sm:text-xl font-bold text-on-surface group-hover:text-primary transition-colors truncate">
               {displayName}
             </h3>
-
-            {displayRating && (
-              <div className="flex items-center gap-1.5 text-xs text-on-surface-variant mt-0.5">
-                <div className="flex items-center text-primary font-bold">
-                  <Icon name="star" className="text-[14px] fill-current" />
-                  <span className="ml-1">{displayRating}</span>
-                </div>
-                {displayReviewCount && (
-                  <span>({displayReviewCount} reviews)</span>
-                )}
+            {packageName && (
+              <div className="flex items-center gap-1.5 pt-0.5 text-xs text-primary font-semibold">
+                <Icon name="sell" className="text-[14px]" />
+                <span>{packageName}</span>
               </div>
             )}
           </div>
@@ -121,7 +125,7 @@ export const SelectedServiceCard: React.FC<SelectedServiceCardProps> = ({
 
           <div className="pt-1 flex items-baseline gap-1.5">
             <span className="text-[11px] text-on-surface-variant uppercase tracking-wider">
-              Starting Price:
+              {packageName ? 'Package Price:' : 'Starting Price:'}
             </span>
             <span className="text-base sm:text-lg font-bold text-primary">
               {formatIndianRupees(displayPrice)}

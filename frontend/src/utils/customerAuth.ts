@@ -60,15 +60,24 @@ export function setCustomerSession(session: CustomerSession): void {
 }
 
 /**
- * Clear only customer session and auth tokens from localStorage
- * Preserves all non-auth customer data (eva_ai_customer, eva_ai_event, eva_ai_event_plan, eva_ai_selected_services, eva_ai_bookings)
+ * Clear customer session, tokens, and customer-specific business data on logout.
+ * Purges customer-specific business records (session, profile, event, selected services, bookings)
+ * while preserving global UI preferences (e.g. eva_ai_theme) and provider data.
  */
 export function clearCustomerSession(): void {
   try {
     localStorage.removeItem(CUSTOMER_SESSION_KEY);
+    localStorage.removeItem(CUSTOMER_PROFILE_KEY);
+    localStorage.removeItem('eva_ai_event');
+    localStorage.removeItem('eva_ai_event_plan');
+    localStorage.removeItem('eva_ai_selected_services');
+    localStorage.removeItem('eva_ai_bookings');
     setStoredAccessToken(null);
     setStoredRefreshToken(null);
     window.dispatchEvent(new Event('eva_ai_customer_session_updated'));
+    window.dispatchEvent(new Event('eva_ai_customer_profile_updated'));
+    window.dispatchEvent(new Event('eva_ai_selected_services_updated'));
+    window.dispatchEvent(new Event('eva_ai_bookings_updated'));
   } catch (err) {
     console.warn('Failed to clear customer session from localStorage:', err);
   }

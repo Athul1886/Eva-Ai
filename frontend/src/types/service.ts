@@ -9,6 +9,7 @@ export type ServiceCategoryName =
   | 'DJ & Entertainment';
 
 export interface ProviderPackage {
+  id?: string;
   name: string;
   price: number;
   description: string;
@@ -64,13 +65,15 @@ export interface SelectedServiceItem {
   serviceId?: string;
   providerId: string;
   providerName: string;
+  packageName?: string;
+  price?: number;
   category: string;
   location: string;
   startingPrice: number;
   selectedAt: string;
   imageUrl?: string;
   notes?: string;
-  packageDetails?: any;
+  packageDetails?: ProviderPackage;
 }
 
 export interface ServiceFilterState {

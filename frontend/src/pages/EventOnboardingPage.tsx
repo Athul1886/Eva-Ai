@@ -256,7 +256,11 @@ export const EventOnboardingPage: React.FC = () => {
             ? eventData.budget
             : Number(eventData.budget) || 0,
         services: eventData.services,
+        requiredServices: eventData.services,
+        required_services: eventData.services,
         preferences: eventData.preferences,
+        stylePreferences: eventData.preferences,
+        style_preferences: eventData.preferences,
         additionalNotes: eventData.additionalNotes.trim(),
       };
 
@@ -270,18 +274,36 @@ export const EventOnboardingPage: React.FC = () => {
             // Update existing event via PUT /events/:id
             const res = await eventsApi.update(eventData.id, payload);
             const backendEvent = extractEventData(res);
-            savedPlan = backendEvent || {
+            savedPlan = {
               ...eventData,
               ...payload,
+              ...(backendEvent || {}),
+              services:
+                backendEvent?.services && backendEvent.services.length > 0
+                  ? backendEvent.services
+                  : eventData.services,
+              preferences:
+                backendEvent?.preferences && backendEvent.preferences.length > 0
+                  ? backendEvent.preferences
+                  : eventData.preferences,
               updatedAt: new Date().toISOString(),
             };
           } catch (updateErr) {
             console.warn('Backend update failed, attempting create as fallback:', updateErr);
             const createRes = await eventsApi.create(payload);
             const backendEvent = extractEventData(createRes);
-            savedPlan = backendEvent || {
+            savedPlan = {
               ...eventData,
               ...payload,
+              ...(backendEvent || {}),
+              services:
+                backendEvent?.services && backendEvent.services.length > 0
+                  ? backendEvent.services
+                  : eventData.services,
+              preferences:
+                backendEvent?.preferences && backendEvent.preferences.length > 0
+                  ? backendEvent.preferences
+                  : eventData.preferences,
               createdAt: new Date().toISOString(),
             };
           }
@@ -289,9 +311,18 @@ export const EventOnboardingPage: React.FC = () => {
           // Create new event via POST /events
           const res = await eventsApi.create(payload);
           const backendEvent = extractEventData(res);
-          savedPlan = backendEvent || {
+          savedPlan = {
             ...eventData,
             ...payload,
+            ...(backendEvent || {}),
+            services:
+              backendEvent?.services && backendEvent.services.length > 0
+                ? backendEvent.services
+                : eventData.services,
+            preferences:
+              backendEvent?.preferences && backendEvent.preferences.length > 0
+                ? backendEvent.preferences
+                : eventData.preferences,
             createdAt: new Date().toISOString(),
           };
         }

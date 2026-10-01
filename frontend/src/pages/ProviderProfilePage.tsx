@@ -9,15 +9,25 @@ import {
   normalizeBackendProviderProfile,
   saveProviderAccount,
   setProviderSession,
+  normalizeProviderCategory,
 } from '../utils/providerAuth';
 import { providersApi, ApiError, getStoredAccessToken } from '../api/api';
 
 export const ProviderProfilePage: React.FC = () => {
   const { session } = useOutletContext<{ session: ProviderSession }>();
-  const [profile, setProfile] = useState<ProviderAccount | null>(null);
+  const initialCachedProfile = session?.providerId ? getProviderProfile(session.providerId) : null;
+  const [profile, setProfile] = useState<ProviderAccount | null>(initialCachedProfile);
   const [isEditing, setIsEditing] = useState(false);
-  const [editForm, setEditForm] = useState<Partial<ProviderAccount>>({});
-  const [editCategoryData, setEditCategoryData] = useState<CategorySpecificData>({});
+  const [editForm, setEditForm] = useState<Partial<ProviderAccount>>({
+    businessName: initialCachedProfile?.businessName,
+    fullName: initialCachedProfile?.fullName,
+    phone: initialCachedProfile?.phone,
+    location: initialCachedProfile?.location,
+    description: initialCachedProfile?.description,
+    startingPrice: initialCachedProfile?.startingPrice,
+    yearsExperience: initialCachedProfile?.yearsExperience,
+  });
+  const [editCategoryData, setEditCategoryData] = useState<CategorySpecificData>(initialCachedProfile?.categoryData || {});
   const [toastNotice, setToastNotice] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
@@ -27,6 +37,8 @@ export const ProviderProfilePage: React.FC = () => {
   const [photoPreview, setPhotoPreview] = useState<string | null>(null);
   const [photoFileError, setPhotoFileError] = useState<string | null>(null);
   const [isSavingPhoto, setIsSavingPhoto] = useState(false);
+
+  const pageInstanceId = useRef(`profile_page_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`).current;
 
   const showToast = (message: string, type: 'success' | 'error' = 'success', duration = 3500) => {
     setToastNotice({ message, type });
@@ -109,7 +121,12 @@ export const ProviderProfilePage: React.FC = () => {
   useEffect(() => {
     loadProfile(false);
 
-    const handleSync = () => {
+    const handleSync = (e: Event) => {
+      const customEvent = e as CustomEvent;
+      // Prevent self-overwrite race: ignore events emitted by this same component instance
+      if (customEvent.detail?.senderId === pageInstanceId) {
+        return;
+      }
       loadProfile(true);
     };
 
@@ -122,7 +139,7 @@ export const ProviderProfilePage: React.FC = () => {
       window.removeEventListener('eva_ai_provider_profile_updated', handleSync);
       window.removeEventListener('storage', handleSync);
     };
-  }, [loadProfile]);
+  }, [loadProfile, pageInstanceId]);
 
   const handleEditSave = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -137,20 +154,38 @@ export const ProviderProfilePage: React.FC = () => {
       return;
     }
 
+    // Explicit numeric yearsExperience calculation preserving valid 0
+    const numYears =
+      editForm.yearsExperience !== undefined && editForm.yearsExperience !== '' && !isNaN(Number(editForm.yearsExperience))
+        ? Number(editForm.yearsExperience)
+        : profile.yearsExperience !== undefined && profile.yearsExperience !== null && profile.yearsExperience !== '' && !isNaN(Number(profile.yearsExperience))
+        ? Number(profile.yearsExperience)
+        : 0;
+
     // Decouple portfolio and pricing packages from profile payload (they have dedicated endpoints)
     const { portfolioImages: _ignoredPortfolio, packageInfo: _ignoredPackages, ...categorySpecializations } =
       (editCategoryData as any) || {};
 
-    // Construct clean profile payload containing only supported profile fields
+    // Construct clean profile payload with all compatibility aliases for backend persistence
     const payload = {
       businessName,
       fullName,
       phone: (editForm.phone ?? profile.phone ?? '').trim(),
       location: (editForm.location ?? profile.location ?? '').trim(),
       description: (editForm.description ?? profile.description ?? '').trim(),
-      startingPrice: Number(editForm.startingPrice ?? profile.startingPrice ?? 25000),
-      yearsExperience: Number(editForm.yearsExperience ?? profile.yearsExperience ?? 5),
+      startingPrice:
+        editForm.startingPrice !== undefined && editForm.startingPrice !== '' && !isNaN(Number(editForm.startingPrice))
+          ? Number(editForm.startingPrice)
+          : profile.startingPrice !== undefined && profile.startingPrice !== null
+          ? Number(profile.startingPrice)
+          : 0,
+      yearsExperience: numYears,
+      years_experience: numYears,
+      experience: numYears,
+      experience_years: numYears,
+      years: numYears,
       category: profile.category,
+      serviceCategory: profile.category,
       categoryData: categorySpecializations,
     };
 
@@ -162,6 +197,7 @@ export const ProviderProfilePage: React.FC = () => {
       const normalized = normalizeBackendProviderProfile(res, {
         ...profile,
         ...payload,
+        yearsExperience: numYears,
         categoryData: {
           ...profile.categoryData,
           ...categorySpecializations,
@@ -172,6 +208,16 @@ export const ProviderProfilePage: React.FC = () => {
 
       if (normalized) {
         setProfile(normalized);
+        setEditForm({
+          businessName: normalized.businessName,
+          fullName: normalized.fullName,
+          phone: normalized.phone,
+          location: normalized.location,
+          description: normalized.description,
+          startingPrice: normalized.startingPrice,
+          yearsExperience: normalized.yearsExperience,
+        });
+        setEditCategoryData(normalized.categoryData || {});
         saveProviderAccount(normalized);
 
         // Keep active session synchronized
@@ -186,9 +232,11 @@ export const ProviderProfilePage: React.FC = () => {
           });
         }
 
-        // Dispatch profile update events for cross-component live sync
+        // Dispatch profile update events for cross-component live sync tagging senderId
         window.dispatchEvent(
-          new CustomEvent('eva_ai_provider_profile_updated', { detail: { providerId: normalized.id } })
+          new CustomEvent('eva_ai_provider_profile_updated', {
+            detail: { providerId: normalized.id, senderId: pageInstanceId },
+          })
         );
         window.dispatchEvent(new Event('eva_ai_provider_session_updated'));
         window.dispatchEvent(new Event('storage'));
@@ -306,7 +354,7 @@ export const ProviderProfilePage: React.FC = () => {
     );
   }
 
-  const category = profile.category;
+  const category = normalizeProviderCategory(profile.category) || profile.category;
   const categoryData = profile.categoryData || {};
 
   // Check if there is category-specific data to display
@@ -504,8 +552,8 @@ export const ProviderProfilePage: React.FC = () => {
               </label>
               <input
                 type="number"
-                value={editForm.yearsExperience || ''}
-                onChange={(e) => setEditForm({ ...editForm, yearsExperience: Number(e.target.value) })}
+                value={editForm.yearsExperience !== undefined && editForm.yearsExperience !== null ? editForm.yearsExperience : ''}
+                onChange={(e) => setEditForm({ ...editForm, yearsExperience: e.target.value === '' ? '' : Number(e.target.value) })}
                 className="w-full h-11 px-4 rounded-xl bg-surface-container text-on-surface text-sm focus:outline-none focus:ring-1 focus:ring-secondary border border-surface-container-highest/60"
               />
             </div>
@@ -874,12 +922,18 @@ export const ProviderProfilePage: React.FC = () => {
 
               {/* Photo Display with Preview State */}
               <div className="flex flex-col items-center text-center">
-                <div className="relative group w-28 h-28 sm:w-32 sm:h-32 rounded-3xl overflow-hidden border-2 border-secondary/50 shadow-2xl mb-3 bg-surface-container">
-                  <img
-                    src={photoPreview || profile.profileImage || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=400&q=80'}
-                    alt={profile.businessName}
-                    className="w-full h-full object-cover"
-                  />
+                <div className="relative group w-28 h-28 sm:w-32 sm:h-32 rounded-3xl overflow-hidden border-2 border-secondary/50 shadow-2xl mb-3 bg-surface-container flex items-center justify-center">
+                  {photoPreview || profile.profileImage ? (
+                    <img
+                      src={photoPreview || profile.profileImage}
+                      alt={profile.businessName}
+                      className="w-full h-full object-cover"
+                    />
+                  ) : (
+                    <div className="flex flex-col items-center justify-center text-on-surface-variant/40">
+                      <Icon name="person" className="text-4xl" />
+                    </div>
+                  )}
                   {photoPreview && (
                     <div className="absolute top-2 right-2 px-2 py-0.5 rounded-full text-[10px] font-bold bg-secondary text-on-secondary-fixed shadow">
                       Preview
@@ -982,11 +1036,15 @@ export const ProviderProfilePage: React.FC = () => {
                 </div>
                 <div className="flex justify-between items-start gap-2 py-1 border-b border-surface-container">
                   <span className="text-on-surface-variant shrink-0">Experience:</span>
-                  <span className="font-semibold text-on-surface text-right">{profile.yearsExperience || 5} Years</span>
+                  <span className="font-semibold text-on-surface text-right">
+                    {profile.yearsExperience !== undefined && profile.yearsExperience !== null ? profile.yearsExperience : 0} Years
+                  </span>
                 </div>
                 <div className="flex justify-between items-start gap-2 py-1">
                   <span className="text-on-surface-variant shrink-0">Starting Price:</span>
-                  <span className="font-bold text-primary text-right">₹{profile.startingPrice?.toLocaleString('en-IN') || '45,000'}</span>
+                  <span className="font-bold text-primary text-right">
+                    {profile.startingPrice !== undefined && profile.startingPrice !== null ? `₹${profile.startingPrice.toLocaleString('en-IN')}` : 'Not set'}
+                  </span>
                 </div>
               </div>
             </div>

@@ -3,31 +3,111 @@ import { Link, useNavigate } from 'react-router-dom';
 import Header from '../components/layout/Header';
 import Footer from '../components/layout/Footer';
 import Icon from '../components/common/Icon';
-import { EventPlanData, formatIndianRupees, extractEventData } from '../types/event';
+import { EventPlanData, formatIndianRupees, extractEventData, extractDisplayString } from '../types/event';
 import { CustomerProfileData } from './CustomerSignupPage';
 import { normalizeBackendBookings } from '../types/booking';
-import { eventsApi, bookingsApi, getStoredAccessToken } from '../api/api';
+import { getCustomerSession } from '../utils/customerAuth';
+import { eventsApi, bookingsApi, invitationsApi, getStoredAccessToken } from '../api/api';
 
 export const CustomerDashboardPage: React.FC = () => {
   const navigate = useNavigate();
-  const [eventPlan, setEventPlan] = useState<EventPlanData | null>(null);
-  const [customer, setCustomer] = useState<CustomerProfileData | null>(null);
-  const [selectedServicesCount, setSelectedServicesCount] = useState<number>(0);
-  const [bookingsSummary, setBookingsSummary] = useState<{ total: number; pending: number }>({ total: 0, pending: 0 });
-  const [isLoading, setIsLoading] = useState<boolean>(true);
+  const [eventPlan, setEventPlan] = useState<EventPlanData | null>(() => {
+    try {
+      const customerSession = getCustomerSession();
+      const custId = customerSession?.customerId || customerSession?.userId;
+      const eventJson = localStorage.getItem('eva_ai_event');
+      if (eventJson) {
+        const parsed = JSON.parse(eventJson);
+        const owner = parsed?.customerId || parsed?.userId;
+        if (!custId || !owner || owner === custId) {
+          return parsed;
+        }
+      }
+    } catch {
+      // ignore
+    }
+    return null;
+  });
+
+  const [customer, setCustomer] = useState<CustomerProfileData | null>(() => {
+    try {
+      const customerJson = localStorage.getItem('eva_ai_customer');
+      if (customerJson) return JSON.parse(customerJson);
+    } catch {
+      // ignore
+    }
+    return null;
+  });
+
+  const [selectedServicesCount, setSelectedServicesCount] = useState<number>(() => {
+    try {
+      const selectedJson = localStorage.getItem('eva_ai_selected_services');
+      if (selectedJson) {
+        const parsed = JSON.parse(selectedJson);
+        if (Array.isArray(parsed)) return parsed.length;
+      }
+    } catch {
+      // ignore
+    }
+    return 0;
+  });
+
+  const [bookingsSummary, setBookingsSummary] = useState<{ total: number; pending: number }>(() => {
+    try {
+      const bookingsJson = localStorage.getItem('eva_ai_bookings');
+      if (bookingsJson) {
+        const parsed = JSON.parse(bookingsJson);
+        if (Array.isArray(parsed)) {
+          const pending = parsed.filter((b: any) => b.status === 'PENDING').length;
+          return { total: parsed.length, pending };
+        }
+      }
+    } catch {
+      // ignore
+    }
+    return { total: 0, pending: 0 };
+  });
+
+  const [hasInvitation, setHasInvitation] = useState<boolean>(() => {
+    try {
+      const invJson = localStorage.getItem('eva_ai_invitation');
+      if (invJson) {
+        const parsed = JSON.parse(invJson);
+        return Boolean(parsed?.id || parsed?.publicToken);
+      }
+    } catch {
+      // ignore
+    }
+    return false;
+  });
+
+  const [isLoading, setIsLoading] = useState<boolean>(() => {
+    const hasCachedEvent = Boolean(localStorage.getItem('eva_ai_event'));
+    const hasCachedCustomer = Boolean(localStorage.getItem('eva_ai_customer'));
+    return !hasCachedEvent && !hasCachedCustomer;
+  });
 
   useEffect(() => {
     let isMounted = true;
 
     async function loadDashboardData() {
-      // 1. Read local cache first for immediate layout rehydration
+      const customerSession = getCustomerSession();
+      const custId = customerSession?.customerId || customerSession?.userId;
+
+      // 1. Read local cache first for immediate layout rehydration with ownership validation
       let localEvent: EventPlanData | null = null;
       try {
         const eventJson = localStorage.getItem('eva_ai_event');
         if (eventJson) {
-          localEvent = JSON.parse(eventJson);
-          if (isMounted) {
-            setEventPlan(localEvent);
+          const parsed = JSON.parse(eventJson);
+          const owner = parsed?.customerId || parsed?.userId;
+          if (!custId || !owner || owner === custId) {
+            localEvent = parsed;
+            if (isMounted) {
+              setEventPlan(localEvent);
+            }
+          } else {
+            localStorage.removeItem('eva_ai_event');
           }
         }
       } catch (e) {
@@ -99,14 +179,44 @@ export const CustomerDashboardPage: React.FC = () => {
             const eventsList = Array.isArray(rawList) ? rawList : [];
 
             if (eventsList.length > 0) {
-              const latest = eventsList[eventsList.length - 1];
-              backendEvent = extractEventData({ data: latest });
+              const matchingEvents = custId
+                ? eventsList.filter((e: any) => {
+                    const owner = e.customerId || e.userId || e.customer_id || e.user_id;
+                    return !owner || owner === custId;
+                  })
+                : eventsList;
+
+              const active =
+                matchingEvents.length > 0
+                  ? matchingEvents[matchingEvents.length - 1]
+                  : eventsList[eventsList.length - 1];
+
+              backendEvent = extractEventData({ data: active });
             }
           }
 
           if (backendEvent && isMounted) {
-            setEventPlan(backendEvent);
-            localStorage.setItem('eva_ai_event', JSON.stringify(backendEvent));
+            const mergedEvent: EventPlanData = {
+              ...localEvent,
+              ...backendEvent,
+              services:
+                backendEvent.services && backendEvent.services.length > 0
+                  ? backendEvent.services
+                  : (localEvent && (!localEvent.id || localEvent.id === backendEvent.id) && localEvent.services && localEvent.services.length > 0)
+                  ? localEvent.services
+                  : backendEvent.services || [],
+              preferences:
+                backendEvent.preferences && backendEvent.preferences.length > 0
+                  ? backendEvent.preferences
+                  : (localEvent && (!localEvent.id || localEvent.id === backendEvent.id) && localEvent.preferences && localEvent.preferences.length > 0)
+                  ? localEvent.preferences
+                  : backendEvent.preferences || [],
+            };
+            setEventPlan(mergedEvent);
+            localStorage.setItem('eva_ai_event', JSON.stringify(mergedEvent));
+          } else if (!backendEvent && isMounted) {
+            setEventPlan(null);
+            localStorage.removeItem('eva_ai_event');
           }
 
           // Fetch authoritative bookings count
@@ -127,6 +237,23 @@ export const CustomerDashboardPage: React.FC = () => {
             }
           } catch (bErr) {
             console.warn('Backend bookings fetch on dashboard warning:', bErr);
+          }
+
+          // Fetch authoritative invitation status
+          const eventIdToCheck = backendEvent?.id || localEvent?.id;
+          if (eventIdToCheck) {
+            try {
+              const invRes = await invitationsApi.getByEventId(eventIdToCheck);
+              const invData = invRes?.data?.invitation || invRes?.data || invRes?.invitation;
+              if (invData && (invData.id || invData.publicToken)) {
+                if (isMounted) {
+                  setHasInvitation(true);
+                  localStorage.setItem('eva_ai_invitation', JSON.stringify(invData));
+                }
+              }
+            } catch {
+              // ignore
+            }
           }
         } catch (apiErr) {
           console.warn('Failed to fetch events from backend:', apiErr);
@@ -169,7 +296,7 @@ export const CustomerDashboardPage: React.FC = () => {
     }
   };
 
-  if (isLoading) {
+  if (isLoading && !eventPlan && !customer) {
     return (
       <div className="bg-surface min-h-screen flex items-center justify-center text-on-surface">
         <div className="w-8 h-8 border-2 border-primary border-t-transparent rounded-full animate-spin" />
@@ -301,14 +428,23 @@ export const CustomerDashboardPage: React.FC = () => {
                     </h2>
                   </div>
 
-                  <button
-                    type="button"
-                    onClick={() => navigate('/onboarding/event')}
-                    className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-surface-container hover:bg-surface-bright text-primary font-title-md text-sm font-semibold transition-colors border border-surface-container-highest/80 self-start sm:self-auto"
-                  >
-                    <Icon name="edit" className="text-[16px]" />
-                    <span>Edit Event Plan</span>
-                  </button>
+                  <div className="flex flex-wrap items-center gap-3 self-start sm:self-auto">
+                    <Link
+                      to="/customer/invitation"
+                      className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-primary hover:bg-tertiary text-on-primary font-title-md text-sm font-bold transition-all shadow-[0_0_20px_rgba(242,202,80,0.25)]"
+                    >
+                      <span>{hasInvitation ? '💌 View Invitation' : '💌 Create Invitation'}</span>
+                    </Link>
+
+                    <button
+                      type="button"
+                      onClick={() => navigate('/onboarding/event')}
+                      className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-surface-container hover:bg-surface-bright text-on-surface font-title-md text-sm font-semibold transition-colors border border-surface-container-highest/80"
+                    >
+                      <Icon name="edit" className="text-[16px] text-primary" />
+                      <span>Edit Event Plan</span>
+                    </button>
+                  </div>
                 </div>
 
                 {/* Key Metrics Grid */}
@@ -366,15 +502,19 @@ export const CustomerDashboardPage: React.FC = () => {
                   </h3>
                   {eventPlan.services && eventPlan.services.length > 0 ? (
                     <div className="flex flex-wrap gap-2">
-                      {eventPlan.services.map((srv) => (
-                        <span
-                          key={srv}
-                          className="px-3 py-1.5 rounded-xl bg-surface-container text-on-surface text-xs font-medium border border-surface-container-highest/70 flex items-center gap-1.5"
-                        >
-                          <Icon name="check_circle" className="text-[14px] text-primary" />
-                          {srv}
-                        </span>
-                      ))}
+                      {eventPlan.services.map((srv, index) => {
+                        const label = extractDisplayString(srv, 'Service');
+                        const key = `service-${index}-${label}`;
+                        return (
+                          <span
+                            key={key}
+                            className="px-3 py-1.5 rounded-xl bg-surface-container text-on-surface text-xs font-medium border border-surface-container-highest/70 flex items-center gap-1.5"
+                          >
+                            <Icon name="check_circle" className="text-[14px] text-primary" />
+                            {label}
+                          </span>
+                        );
+                      })}
                     </div>
                   ) : (
                     <p className="text-xs text-on-surface-variant italic">
@@ -391,14 +531,18 @@ export const CustomerDashboardPage: React.FC = () => {
                   </h3>
                   {eventPlan.preferences && eventPlan.preferences.length > 0 ? (
                     <div className="flex flex-wrap gap-2">
-                      {eventPlan.preferences.map((p) => (
-                        <span
-                          key={p}
-                          className="px-3 py-1 rounded-lg bg-primary/10 text-primary text-xs font-semibold border border-primary/30"
-                        >
-                          {p}
-                        </span>
-                      ))}
+                      {eventPlan.preferences.map((p, index) => {
+                        const label = extractDisplayString(p, 'Preference');
+                        const key = `preference-${index}-${label}`;
+                        return (
+                          <span
+                            key={key}
+                            className="px-3 py-1 rounded-lg bg-primary/10 text-primary text-xs font-semibold border border-primary/30"
+                          >
+                            {label}
+                          </span>
+                        );
+                      })}
                     </div>
                   ) : (
                     <p className="text-xs text-on-surface-variant italic">
@@ -421,7 +565,7 @@ export const CustomerDashboardPage: React.FC = () => {
                 )}
 
                 {/* Next Steps Advisory & Explore Services Banner */}
-                <div className="p-6 rounded-2xl bg-gradient-to-r from-primary/10 via-surface-container to-surface-container border border-primary/30 space-y-4">
+                {/* <div className="p-6 rounded-2xl bg-gradient-to-r from-primary/10 via-surface-container to-surface-container border border-primary/30 space-y-4">
                   <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
                     <div className="flex items-center gap-2 text-primary font-semibold text-sm">
                       <Icon name="auto_awesome" className="text-[18px]" />
@@ -471,7 +615,7 @@ export const CustomerDashboardPage: React.FC = () => {
                       )}
                     </Link>
                   </div>
-                </div>
+                </div> */}
 
                 {/* Action Buttons */}
                 <div className="pt-2 flex flex-col sm:flex-row items-center justify-between gap-4">
@@ -484,30 +628,30 @@ export const CustomerDashboardPage: React.FC = () => {
                   </Link>
 
                   <div className="flex flex-col sm:flex-row items-center gap-3 w-full sm:w-auto">
-                    <button
+                    {/* <button
                       type="button"
                       onClick={() => navigate('/onboarding/event')}
                       className="w-full sm:w-auto px-5 py-3.5 rounded-xl bg-surface-container hover:bg-surface-bright text-on-surface font-title-md font-medium transition-colors border border-surface-container-highest/60 flex items-center justify-center gap-2"
                     >
                       <Icon name="restart_alt" className="text-[18px]" />
                       <span>Plan Another Event</span>
-                    </button>
+                    </button> */}
 
-                    <Link
+                    {/* <Link
                       to="/customer/event-plan"
                       className="w-full sm:w-auto px-5 py-3.5 rounded-xl bg-surface-container hover:bg-surface-bright text-primary font-title-md font-semibold transition-colors border border-primary/40 flex items-center justify-center gap-2"
                     >
                       <Icon name="event_note" className="text-[18px]" />
                       <span>Event Plan</span>
-                    </Link>
+                    </Link> */}
 
-                    <Link
+                    {/* <Link
                       to="/customer/bookings"
                       className="w-full sm:w-auto px-5 py-3.5 rounded-xl bg-surface-container hover:bg-surface-bright text-on-surface font-title-md font-semibold transition-colors border border-surface-container-highest/60 hover:border-primary/40 flex items-center justify-center gap-2"
                     >
                       <Icon name="receipt_long" className="text-[18px] text-primary" />
                       <span>My Bookings</span>
-                    </Link>
+                    </Link> */}
 
                     <Link
                       to="/customer/services"

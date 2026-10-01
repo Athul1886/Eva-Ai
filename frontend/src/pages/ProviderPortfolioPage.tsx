@@ -5,7 +5,6 @@ import { ProviderAccount, ProviderSession } from '../types/provider';
 import {
   getProviderProfile,
   updateProviderProfile,
-  compressImageFile,
   normalizePortfolioItems,
   normalizeServicePackages,
 } from '../utils/providerAuth';
@@ -19,23 +18,39 @@ interface PackageItem {
   features?: string[];
 }
 
+interface PendingUploadItem {
+  file: File;
+  previewUrl: string;
+}
+
+interface PortfolioItemRecord {
+  id?: string;
+  url: string;
+}
+
 export const ProviderPortfolioPage: React.FC = () => {
   const { session } = useOutletContext<{ session: ProviderSession }>();
-  const [profile, setProfile] = useState<ProviderAccount | null>(null);
-  const [images, setImages] = useState<string[]>([]);
+  const initialCachedProfile = session?.providerId ? getProviderProfile(session.providerId) : null;
+  const [profile, setProfile] = useState<ProviderAccount | null>(initialCachedProfile);
+  const [images, setImages] = useState<string[]>(() =>
+    normalizePortfolioItems(initialCachedProfile?.categoryData?.portfolioImages)
+  );
+  const [portfolioItems, setPortfolioItems] = useState<PortfolioItemRecord[]>([]);
   const [toastNotice, setToastNotice] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(false);
 
   // Work Gallery Local File Upload State
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const [selectedUploads, setSelectedUploads] = useState<string[]>([]);
+  const [selectedUploads, setSelectedUploads] = useState<PendingUploadItem[]>([]);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [showUploadModal, setShowUploadModal] = useState<boolean>(false);
   const [isUploadingPhotos, setIsUploadingPhotos] = useState<boolean>(false);
   const [deletingImageIndex, setDeletingImageIndex] = useState<number | null>(null);
 
   // Packages State
-  const [packages, setPackages] = useState<PackageItem[]>([]);
+  const [packages, setPackages] = useState<PackageItem[]>(() =>
+    normalizeServicePackages(initialCachedProfile?.categoryData?.packageInfo)
+  );
   const [editingPackage, setEditingPackage] = useState<PackageItem | null>(null);
   const [isNewPackage, setIsNewPackage] = useState<boolean>(false);
   const [packageError, setPackageError] = useState<string | null>(null);
@@ -50,6 +65,9 @@ export const ProviderPortfolioPage: React.FC = () => {
     }, duration);
   };
 
+  const isUploadingRef = useRef(false);
+  isUploadingRef.current = isUploadingPhotos;
+
   const loadData = useCallback(async (silent = false) => {
     const providerId = session?.providerId;
     if (!providerId) return;
@@ -58,23 +76,13 @@ export const ProviderPortfolioPage: React.FC = () => {
     const cached = getProviderProfile(providerId);
     setProfile(cached);
 
-    let initialImages: string[] = cached?.categoryData?.portfolioImages || [];
-    let initialPackages: PackageItem[] = cached?.categoryData?.packageInfo || [];
+    const initialImages: string[] = cached?.categoryData?.portfolioImages || [];
+    const initialPackages: PackageItem[] = cached?.categoryData?.packageInfo || [];
 
-    if (initialPackages.length === 0) {
-      initialPackages = [
-        {
-          id: `pkg-${providerId}-1`,
-          name: 'Essential Atelier Tier',
-          price: Number(cached?.startingPrice) || 35000,
-          description: 'Core professional celebration coverage with dedicated crew and master output delivery.',
-          features: ['Full day coverage', 'Color-graded digital deliverable', 'Consultation & Planning'],
-        },
-      ];
+    if (!silent) {
+      setImages(initialImages);
+      setPackages(initialPackages);
     }
-
-    setImages(initialImages);
-    setPackages(initialPackages);
 
     // 2. Fetch authoritative portfolio and packages from backend API
     const token = getStoredAccessToken();
@@ -86,7 +94,35 @@ export const ProviderPortfolioPage: React.FC = () => {
         let backendImages = initialImages;
         try {
           const portfolioRes: any = await providersApi.getPortfolio();
-          backendImages = normalizePortfolioItems(portfolioRes, initialImages);
+          const rawList =
+            (Array.isArray(portfolioRes) ? portfolioRes : null) ||
+            (Array.isArray(portfolioRes?.portfolios) ? portfolioRes.portfolios : null) ||
+            (Array.isArray(portfolioRes?.portfolio) ? portfolioRes.portfolio : null) ||
+            (Array.isArray(portfolioRes?.data?.portfolios) ? portfolioRes.data.portfolios : null) ||
+            (Array.isArray(portfolioRes?.data?.portfolio) ? portfolioRes.data.portfolio : null) ||
+            (Array.isArray(portfolioRes?.data) ? portfolioRes.data : null) ||
+            null;
+
+          if (rawList !== null) {
+            const records: PortfolioItemRecord[] = [];
+            const urls: string[] = [];
+            for (const item of rawList) {
+              const url =
+                typeof item === 'string'
+                  ? item.trim()
+                  : (item?.imageUrl || item?.image_url || item?.url || item?.image || item?.src || item?.media_url || item?.mediaUrl || item?.photo || item?.photo_url || item?.fileUrl || item?.file_url || item?.portfolio_url || item?.portfolioUrl || item?.path || '');
+              const id = typeof item === 'object' && item ? (item.id || item._id) : undefined;
+              if (url && !urls.includes(url)) {
+                urls.push(url);
+                records.push({ id, url });
+              }
+            }
+            backendImages = urls;
+            setPortfolioItems(records);
+          } else {
+            const normalized = normalizePortfolioItems(portfolioRes, initialImages);
+            backendImages = normalized;
+          }
         } catch (err) {
           console.warn('Backend portfolio GET returned error, using cached images:', err);
         }
@@ -96,27 +132,39 @@ export const ProviderPortfolioPage: React.FC = () => {
         try {
           const servicesRes: any = await servicesApi.getMyServices();
           const normalized = normalizeServicePackages(servicesRes, initialPackages);
-          if (normalized.length > 0) {
+          if (normalized.length > 0 || (Array.isArray(servicesRes?.services) && servicesRes.services.length === 0)) {
             backendPackages = normalized;
           }
         } catch (err) {
           console.warn('Backend services GET returned error, using cached packages:', err);
         }
 
-        // Update state and local cache
+        // Update state with backend authoritative data
         setImages(backendImages);
         setPackages(backendPackages);
 
         const current = getProviderProfile(providerId);
         const currentCatData = current?.categoryData || {};
-        const updatedCatData = {
-          ...currentCatData,
-          portfolioImages: backendImages,
-          packageInfo: backendPackages,
-        };
-        const updatedProfile = updateProviderProfile(providerId, { categoryData: updatedCatData });
-        if (updatedProfile) {
-          setProfile(updatedProfile);
+        const prevImages = currentCatData.portfolioImages || [];
+        const prevPackages = currentCatData.packageInfo || [];
+
+        const isSameImages =
+          prevImages.length === backendImages.length &&
+          prevImages.every((img, i) => img === backendImages[i]);
+        const isSamePackages =
+          prevPackages.length === backendPackages.length &&
+          prevPackages.every((pkg, i) => pkg.id === backendPackages[i]?.id);
+
+        if (!isSameImages || !isSamePackages) {
+          const updatedCatData = {
+            ...currentCatData,
+            portfolioImages: backendImages,
+            packageInfo: backendPackages,
+          };
+          const updatedProfile = updateProviderProfile(providerId, { categoryData: updatedCatData });
+          if (updatedProfile) {
+            setProfile(updatedProfile);
+          }
         }
       } catch (err: any) {
         console.warn('Failed fetching authoritative portfolio from backend:', err);
@@ -137,7 +185,9 @@ export const ProviderPortfolioPage: React.FC = () => {
     loadData(false);
 
     const handleSync = () => {
-      loadData(true);
+      if (!isUploadingRef.current) {
+        loadData(true);
+      }
     };
 
     window.addEventListener('eva_ai_provider_session_updated', handleSync);
@@ -151,14 +201,14 @@ export const ProviderPortfolioPage: React.FC = () => {
     };
   }, [loadData]);
 
-  // Gallery: Local File Picker (Multiple) with client-side compression
-  const handleFilesSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  // Gallery: Local File Picker (Multiple) - stores native File objects
+  const handleFilesSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     setUploadError(null);
     const files = e.target.files;
     if (!files || files.length === 0) return;
 
     const validTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
-    const newPreviews: string[] = [];
+    const newItems: PendingUploadItem[] = [];
 
     for (let i = 0; i < files.length; i++) {
       const file = files[i];
@@ -166,28 +216,43 @@ export const ProviderPortfolioPage: React.FC = () => {
         setUploadError('One or more files have an invalid format. Accepted: JPG, PNG, WEBP.');
         continue;
       }
-      if (file.size > 8 * 1024 * 1024) {
-        setUploadError('One or more files exceed the 8MB size limit.');
+      if (file.size > 15 * 1024 * 1024) {
+        setUploadError('One or more files exceed the 15MB size limit.');
         continue;
       }
 
-      try {
-        // Compress to max 1200x900 at 0.8 quality (~50-80KB each)
-        const compressed = await compressImageFile(file, 1200, 900, 0.8);
-        newPreviews.push(compressed);
-      } catch (err: any) {
-        setUploadError(err.message || 'Failed processing image file.');
-      }
+      const previewUrl = URL.createObjectURL(file);
+      newItems.push({ file, previewUrl });
     }
 
-    if (newPreviews.length > 0) {
-      setSelectedUploads((prev) => [...prev, ...newPreviews]);
+    if (newItems.length > 0) {
+      setSelectedUploads((prev) => [...prev, ...newItems]);
       setShowUploadModal(true);
     }
   };
 
   const handleRemovePendingUpload = (index: number) => {
-    setSelectedUploads((prev) => prev.filter((_, i) => i !== index));
+    setSelectedUploads((prev) => {
+      const item = prev[index];
+      if (item?.previewUrl) {
+        try {
+          URL.revokeObjectURL(item.previewUrl);
+        } catch {}
+      }
+      return prev.filter((_, i) => i !== index);
+    });
+  };
+
+  const handleCloseUploadModal = () => {
+    selectedUploads.forEach((item) => {
+      try {
+        URL.revokeObjectURL(item.previewUrl);
+      } catch {}
+    });
+    setSelectedUploads([]);
+    setShowUploadModal(false);
+    setUploadError(null);
+    if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
   const handleSaveUploads = async () => {
@@ -195,42 +260,41 @@ export const ProviderPortfolioPage: React.FC = () => {
     if (selectedUploads.length === 0 || !providerId || isUploadingPhotos) return;
 
     setIsUploadingPhotos(true);
+    setUploadError(null);
 
     try {
-      // 1. Send each added image or batch to POST /providers/portfolio
-      for (const imgUrl of selectedUploads) {
+      let uploadedCount = 0;
+
+      // 1. Send each File in a FormData payload to POST /providers/portfolio
+      for (const item of selectedUploads) {
+        const formData = new FormData();
+        formData.append('portfolioImage', item.file);
+
         try {
-          await providersApi.addPortfolio({
-            imageUrl: imgUrl,
-            image: imgUrl,
-            title: `Portfolio piece ${Date.now()}`,
-          });
-        } catch (err) {
-          console.warn('Backend addPortfolio call error (fallback to local cache):', err);
+          await providersApi.addPortfolio(formData);
+          uploadedCount++;
+        } catch (err: any) {
+          console.error('Backend addPortfolio multipart upload failed:', err);
+          throw new Error(err?.message || 'Failed uploading one or more images.');
         }
       }
 
-      // 2. Update local state and local storage cache
-      const current = getProviderProfile(providerId);
-      const currentImages = current?.categoryData?.portfolioImages || images;
-      const updatedImages = [...currentImages, ...selectedUploads];
-
-      const currentCatData = current?.categoryData || {};
-      const updatedCatData = { ...currentCatData, portfolioImages: updatedImages };
-      const updated = updateProviderProfile(providerId, { categoryData: updatedCatData });
-
-      if (updated) {
-        setProfile(updated);
-        setImages(updatedImages);
-      }
-
+      // 2. Revoke preview URLs and reset pending state
+      selectedUploads.forEach((item) => {
+        try {
+          URL.revokeObjectURL(item.previewUrl);
+        } catch {}
+      });
       setSelectedUploads([]);
       setShowUploadModal(false);
-      setUploadError(null);
       if (fileInputRef.current) fileInputRef.current.value = '';
 
-      showToast(`Added ${selectedUploads.length} new work image(s) to gallery!`, 'success');
+      showToast(`Added ${uploadedCount} new work image(s) to gallery!`, 'success');
+
+      // 3. Authoritatively reload portfolio from backend (the source of truth)
+      await loadData(false);
     } catch (err: any) {
+      setUploadError(err?.message || 'Failed adding images to portfolio.');
       showToast(err?.message || 'Failed adding images to portfolio.', 'error');
     } finally {
       setIsUploadingPhotos(false);
@@ -244,26 +308,18 @@ export const ProviderPortfolioPage: React.FC = () => {
     setDeletingImageIndex(indexToRemove);
 
     try {
-      // 1. Attempt DELETE /providers/portfolio/:id if applicable
+      const record = portfolioItems[indexToRemove];
+      const deleteId = record?.id || String(indexToRemove);
+
+      // 1. Attempt DELETE /providers/portfolio/:id on backend
       try {
-        await providersApi.deletePortfolio(String(indexToRemove));
+        await providersApi.deletePortfolio(deleteId);
       } catch (err) {
         console.warn('Backend deletePortfolio returned error, syncing locally:', err);
       }
 
-      // 2. Update local state and storage cache
-      const current = getProviderProfile(providerId);
-      const currentImages = current?.categoryData?.portfolioImages || images;
-      const updatedImages = currentImages.filter((_, idx) => idx !== indexToRemove);
-
-      const currentCatData = current?.categoryData || {};
-      const updatedCatData = { ...currentCatData, portfolioImages: updatedImages };
-      const updated = updateProviderProfile(providerId, { categoryData: updatedCatData });
-
-      if (updated) {
-        setProfile(updated);
-        setImages(updatedImages);
-      }
+      // 2. Re-fetch authoritative portfolio state from backend
+      await loadData(false);
 
       showToast('Image removed from portfolio gallery.', 'success');
     } catch (err: any) {
@@ -278,7 +334,7 @@ export const ProviderPortfolioPage: React.FC = () => {
     setEditingPackage({
       id: `pkg-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
       name: '',
-      price: 25000,
+      price: Number(profile?.startingPrice) || 0,
       description: '',
       features: [],
     });
@@ -696,10 +752,7 @@ export const ProviderPortfolioPage: React.FC = () => {
               </div>
               <button
                 type="button"
-                onClick={() => {
-                  setSelectedUploads([]);
-                  setShowUploadModal(false);
-                }}
+                onClick={handleCloseUploadModal}
                 className="p-1.5 rounded-lg text-outline hover:text-on-surface shrink-0"
               >
                 ✕
@@ -708,9 +761,9 @@ export const ProviderPortfolioPage: React.FC = () => {
 
             {/* Preview Grid */}
             <div className="flex-1 overflow-y-auto grid grid-cols-2 sm:grid-cols-3 gap-3 p-1">
-              {selectedUploads.map((src, i) => (
+              {selectedUploads.map((item, i) => (
                 <div key={i} className="relative rounded-2xl overflow-hidden aspect-video bg-surface-container border border-surface-container-highest group">
-                  <img src={src} alt={`Upload ${i}`} className="w-full h-full object-cover" />
+                  <img src={item.previewUrl} alt={item.file.name || `Upload ${i}`} className="w-full h-full object-cover" />
                   <button
                     type="button"
                     onClick={() => handleRemovePendingUpload(i)}
@@ -728,7 +781,8 @@ export const ProviderPortfolioPage: React.FC = () => {
               <button
                 type="button"
                 onClick={() => fileInputRef.current?.click()}
-                className="px-3.5 py-2 rounded-xl bg-surface-container hover:bg-surface-container-high text-xs font-semibold text-on-surface border border-surface-container-highest"
+                disabled={isUploadingPhotos}
+                className="px-3.5 py-2 rounded-xl bg-surface-container hover:bg-surface-container-high text-xs font-semibold text-on-surface border border-surface-container-highest disabled:opacity-50"
               >
                 + Add More
               </button>
@@ -736,22 +790,20 @@ export const ProviderPortfolioPage: React.FC = () => {
               <div className="flex items-center gap-2">
                 <button
                   type="button"
-                  onClick={() => {
-                    setSelectedUploads([]);
-                    setShowUploadModal(false);
-                  }}
-                  className="px-4 py-2 rounded-xl text-xs font-semibold text-on-surface-variant hover:text-on-surface flex-1 xs:flex-initial"
+                  onClick={handleCloseUploadModal}
+                  disabled={isUploadingPhotos}
+                  className="px-4 py-2 rounded-xl text-xs font-semibold text-on-surface-variant hover:text-on-surface flex-1 xs:flex-initial disabled:opacity-50"
                 >
                   Cancel
                 </button>
                 <button
                   type="button"
                   onClick={handleSaveUploads}
-                  disabled={selectedUploads.length === 0}
-                  className="px-5 py-2.5 rounded-xl bg-secondary hover:bg-secondary-fixed-dim text-on-secondary-fixed text-xs font-bold shadow-[0_0_15px_rgba(255,178,190,0.3)] transition-all flex items-center justify-center gap-1.5 flex-1 xs:flex-initial"
+                  disabled={selectedUploads.length === 0 || isUploadingPhotos}
+                  className="px-5 py-2.5 rounded-xl bg-secondary hover:bg-secondary-fixed-dim text-on-secondary-fixed text-xs font-bold shadow-[0_0_15px_rgba(255,178,190,0.3)] transition-all flex items-center justify-center gap-1.5 flex-1 xs:flex-initial disabled:opacity-50"
                 >
-                  <Icon name="check" className="text-[16px]" />
-                  <span>Save</span>
+                  <Icon name={isUploadingPhotos ? 'refresh' : 'check'} className={`text-[16px] ${isUploadingPhotos ? 'animate-spin' : ''}`} />
+                  <span>{isUploadingPhotos ? 'Uploading...' : 'Save'}</span>
                 </button>
               </div>
             </div>

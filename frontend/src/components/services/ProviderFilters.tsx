@@ -1,10 +1,12 @@
 import React from 'react';
 import Icon from '../common/Icon';
-import { MOCK_LOCATIONS, PRICE_RANGES, SERVICE_CATEGORIES } from '../../data/mockProviders';
-import { ServiceFilterState } from '../../types/service';
+import { PRICE_RANGES } from '../../constants/filters';
+import { CategoryInfo, ServiceFilterState } from '../../types/service';
 
 interface ProviderFiltersProps {
   filters: ServiceFilterState;
+  categories?: CategoryInfo[];
+  locations?: string[];
   onFilterChange: (newFilters: Partial<ServiceFilterState>) => void;
   onResetFilters: () => void;
   totalResults: number;
@@ -12,6 +14,8 @@ interface ProviderFiltersProps {
 
 export const ProviderFilters: React.FC<ProviderFiltersProps> = ({
   filters,
+  categories = [],
+  locations = ['All Locations'],
   onFilterChange,
   onResetFilters,
   totalResults,
@@ -62,7 +66,10 @@ export const ProviderFilters: React.FC<ProviderFiltersProps> = ({
               className="bg-transparent text-on-surface focus:outline-none cursor-pointer pr-1"
               aria-label="Filter by Category"
             >
-              {SERVICE_CATEGORIES.map((cat) => (
+              {(categories.length > 0
+                ? categories
+                : [{ id: 'all', name: 'All Services', filterKey: 'all', icon: 'apps', description: '' }]
+              ).map((cat) => (
                 <option
                   key={cat.id}
                   value={cat.filterKey}
@@ -83,7 +90,7 @@ export const ProviderFilters: React.FC<ProviderFiltersProps> = ({
               className="bg-transparent text-on-surface focus:outline-none cursor-pointer pr-1"
               aria-label="Filter by Location"
             >
-              {MOCK_LOCATIONS.map((loc) => (
+              {(locations.length > 0 ? locations : ['All Locations']).map((loc) => (
                 <option key={loc} value={loc} className="bg-surface-container text-on-surface">
                   {loc}
                 </option>

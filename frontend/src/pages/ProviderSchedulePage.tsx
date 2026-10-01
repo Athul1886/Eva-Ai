@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useOutletContext } from 'react-router-dom';
 import Icon from '../components/common/Icon';
 import { ProviderSession } from '../types/provider';
@@ -6,17 +6,23 @@ import {
   getProviderAvailability,
   saveProviderAvailability,
   normalizeUnavailableDates,
+  getProviderBookings,
+  normalizeCalendarDate,
 } from '../utils/providerAuth';
-import { providersApi, ApiError } from '../api/api';
+import { normalizeBackendBookings } from '../types/booking';
+import { providersApi, bookingsApi, ApiError } from '../api/api';
 
 export const ProviderSchedulePage: React.FC = () => {
   const { session } = useOutletContext<{ session: ProviderSession }>();
   const [currentDate, setCurrentDate] = useState<Date>(new Date());
+  const [manualBlackoutDates, setManualBlackoutDates] = useState<string[]>([]);
+  const [bookedDates, setBookedDates] = useState<string[]>([]);
   const [unavailableDates, setUnavailableDates] = useState<string[]>([]);
   const [selectedDateStr, setSelectedDateStr] = useState<string | null>(null);
   const [saveNotice, setSaveNotice] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [isSaving, setIsSaving] = useState<boolean>(false);
+  const inFlightRef = useRef(false);
 
   const showToast = (message: string, type: 'success' | 'error' = 'success', duration = 3500) => {
     setSaveNotice({ message, type });
@@ -37,6 +43,8 @@ export const ProviderSchedulePage: React.FC = () => {
 
   const loadAvailability = useCallback(async (silent = false) => {
     if (!session?.providerId) return;
+    if (inFlightRef.current) return;
+    inFlightRef.current = true;
 
     // 1. Initial fast local cache read for layout rendering
     if (!silent) {
@@ -45,38 +53,72 @@ export const ProviderSchedulePage: React.FC = () => {
       setUnavailableDates(validCached);
     }
 
-    // 2. Fetch authoritative availability from backend
+    // 2. Fetch authoritative availability AND bookings in parallel
     try {
       if (!silent) setIsLoading(true);
-      let res: any = null;
-      try {
-        res = await providersApi.getAvailability();
-      } catch (getErr: any) {
-        // Fallback to getUnavailableDates if getAvailability is specific to authenticated provider profile
-        if (session.providerId) {
-          res = await providersApi.getUnavailableDates(session.providerId);
-        } else {
-          throw getErr;
-        }
+
+      const [availResult, bookingsResult] = await Promise.allSettled([
+        providersApi.getUnavailableDates(session.providerId).catch(async () => {
+          return await providersApi.getAvailability();
+        }),
+        bookingsApi.getProviderBookings(),
+      ]);
+
+      let backendUnavailableDates: string[] = [];
+      if (availResult.status === 'fulfilled' && availResult.value) {
+        const raw = (availResult.value as any)?.data ?? availResult.value;
+        backendUnavailableDates = normalizeUnavailableDates(raw);
       }
 
-      const raw = res?.data ?? res;
-      const backendDates = normalizeUnavailableDates(raw);
-      const validDates = backendDates.filter((d) => d >= todayStr);
+      let backendBookedDates: string[] = [];
+      if (bookingsResult.status === 'fulfilled' && bookingsResult.value) {
+        const raw =
+          (bookingsResult.value as any)?.data?.bookings ||
+          (bookingsResult.value as any)?.data ||
+          (bookingsResult.value as any)?.bookings ||
+          bookingsResult.value;
+        const bookingsList = normalizeBackendBookings(raw);
+        const acceptedBookings = bookingsList.filter(
+          (b) => b.status === 'ACCEPTED' && b.eventDate
+        );
+        backendBookedDates = Array.from(
+          new Set(
+            acceptedBookings
+              .map((b) => normalizeCalendarDate(b.eventDate))
+              .filter((d): d is string => Boolean(d))
+          )
+        );
+      } else {
+        const localBookings = getProviderBookings(session.providerId);
+        const accepted = localBookings.filter((b) => b.status === 'ACCEPTED' && b.eventDate);
+        backendBookedDates = Array.from(
+          new Set(
+            accepted
+              .map((b) => normalizeCalendarDate(b.eventDate))
+              .filter((d): d is string => Boolean(d))
+          )
+        );
+      }
 
-      // Backend response takes precedence over localStorage
-      setUnavailableDates(validDates);
-      saveProviderAvailability(session.providerId, validDates);
+      // Distinguish manual blackouts from booked dates
+      const manualDates = backendUnavailableDates.filter((d) => !backendBookedDates.includes(d));
+      const compositeDates = Array.from(new Set([...backendUnavailableDates, ...backendBookedDates]))
+        .filter((d) => d >= todayStr)
+        .sort();
+
+      setManualBlackoutDates(manualDates);
+      setBookedDates(backendBookedDates);
+      setUnavailableDates(compositeDates);
+      saveProviderAvailability(session.providerId, compositeDates);
     } catch (err: any) {
       console.warn('Failed fetching provider availability from backend:', err);
       if (err instanceof ApiError) {
-        if (err.status === 401) {
-          // Handled by token refresh / auth invalidation
-        } else if (err.status === 403) {
+        if (err.status === 403) {
           showToast('Access denied: You do not have permission to view this schedule.', 'error');
         }
       }
     } finally {
+      inFlightRef.current = false;
       if (!silent) setIsLoading(false);
     }
   }, [session?.providerId, todayStr]);
@@ -89,10 +131,12 @@ export const ProviderSchedulePage: React.FC = () => {
     };
 
     window.addEventListener('eva_ai_provider_availability_updated', handleSync);
+    window.addEventListener('eva_ai_bookings_updated', handleSync);
     window.addEventListener('storage', handleSync);
 
     return () => {
       window.removeEventListener('eva_ai_provider_availability_updated', handleSync);
+      window.removeEventListener('eva_ai_bookings_updated', handleSync);
       window.removeEventListener('storage', handleSync);
     };
   }, [loadAvailability]);
@@ -136,44 +180,60 @@ export const ProviderSchedulePage: React.FC = () => {
     const fullDate = getDateStr(day);
     setSelectedDateStr(fullDate);
 
-    // Toggle unavailable
-    setUnavailableDates((prev) => {
+    // If date is an accepted client booking, it cannot be manually toggled
+    if (bookedDates.includes(fullDate)) {
+      showToast('This date is reserved for an accepted client booking.', 'error', 3000);
+      return;
+    }
+
+    // Toggle manual blackout
+    setManualBlackoutDates((prev) => {
+      let updated: string[];
       if (prev.includes(fullDate)) {
-        return prev.filter((d) => d !== fullDate);
+        updated = prev.filter((d) => d !== fullDate);
       } else {
-        return [...prev, fullDate];
+        updated = [...prev, fullDate];
       }
+      const composite = Array.from(new Set([...updated, ...bookedDates])).filter((d) => d >= todayStr);
+      setUnavailableDates(composite);
+      return updated;
     });
   };
 
   const handleSaveSchedule = async () => {
     if (!session?.providerId || isSaving) return;
 
-    // Ensure only today and future dates are saved
-    const cleanDates = unavailableDates.filter((d) => d >= todayStr);
+    // Only persist manual blackout dates to PUT /providers/availability/sync
+    const cleanManualDates = manualBlackoutDates.filter((d) => d >= todayStr && !bookedDates.includes(d));
 
     setIsSaving(true);
 
     try {
       // 1. Authoritative backend request: PUT /providers/availability/sync
       const res: any = await providersApi.syncAvailability({
-        dates: cleanDates,
-        unavailableDates: cleanDates,
+        dates: cleanManualDates,
+        unavailableDates: cleanManualDates,
       });
 
       // 2. Normalize backend response if dates returned
       const raw = res?.data ?? res;
-      const returnedDates = normalizeUnavailableDates(raw);
-      const finalDates = returnedDates.length > 0 ? returnedDates.filter((d) => d >= todayStr) : cleanDates;
+      const returnedManualDates = normalizeUnavailableDates(raw);
+      const finalManual = returnedManualDates.length > 0
+        ? returnedManualDates.filter((d) => d >= todayStr && !bookedDates.includes(d))
+        : cleanManualDates;
 
-      setUnavailableDates(finalDates);
-      saveProviderAvailability(session.providerId, finalDates);
+      setManualBlackoutDates(finalManual);
+      const composite = Array.from(new Set([...finalManual, ...bookedDates])).filter((d) => d >= todayStr);
+
+      setUnavailableDates(composite);
+      saveProviderAvailability(session.providerId, composite);
       showToast('Schedule & Availability synchronized successfully with server!', 'success');
     } catch (err: any) {
       console.warn('Failed to sync schedule with backend:', err);
-      // Fallback: save to localStorage cache so provider does not lose changes
-      saveProviderAvailability(session.providerId, cleanDates);
-      setUnavailableDates(cleanDates);
+      // Fallback: preserve composite in localStorage cache
+      const composite = Array.from(new Set([...cleanManualDates, ...bookedDates])).filter((d) => d >= todayStr);
+      saveProviderAvailability(session.providerId, composite);
+      setUnavailableDates(composite);
 
       if (err instanceof ApiError) {
         if (err.status === 403) {
@@ -190,17 +250,19 @@ export const ProviderSchedulePage: React.FC = () => {
   };
 
   const handleClearAll = () => {
-    setUnavailableDates([]);
+    setManualBlackoutDates([]);
+    const composite = bookedDates.filter((d) => d >= todayStr);
+    setUnavailableDates(composite);
     setSelectedDateStr(null);
+    if (bookedDates.length > 0) {
+      showToast('Cleared manual blackouts. Accepted booking dates remain reserved.', 'success', 3000);
+    } else {
+      showToast('All blackout dates cleared.', 'success', 2500);
+    }
   };
 
   const isToday = (day: number) => {
     return getDateStr(day) === todayStr;
-  };
-
-  const isDateUnavailable = (day: number) => {
-    const fullDate = getDateStr(day);
-    return unavailableDates.includes(fullDate);
   };
 
   return (
@@ -235,11 +297,11 @@ export const ProviderSchedulePage: React.FC = () => {
             Update Atelier Schedule &amp; Availability
           </h1>
           <p className="font-body-sm text-xs sm:text-sm text-on-surface-variant mt-1 break-words">
-            Click on individual dates to mark them as unavailable (blackout dates) to prevent client inquiries.
+            Click on individual dates to mark them as unavailable (blackout dates). Accepted client bookings are automatically guarded.
           </p>
           <div className="flex items-center gap-1.5 text-xs text-outline mt-1 font-medium">
             <Icon name="lock" className="text-[14px] text-outline/70 shrink-0" />
-            <span>Past dates cannot be modified.</span>
+            <span>Past dates cannot be modified. Booked event dates are locked.</span>
           </div>
         </div>
 
@@ -295,7 +357,7 @@ export const ProviderSchedulePage: React.FC = () => {
                 {monthNames[month]} {year}
               </h2>
               <span className="px-2.5 py-0.5 rounded-full text-[11px] sm:text-xs font-semibold bg-surface-container text-primary border border-surface-container-highest">
-                {unavailableDates.filter((d) => d.startsWith(`${year}-${String(month + 1).padStart(2, '0')}`)).length} Blackouts this month
+                {unavailableDates.filter((d) => d.startsWith(`${year}-${String(month + 1).padStart(2, '0')}`)).length} Unavailable this month
               </span>
             </div>
 
@@ -343,10 +405,12 @@ export const ProviderSchedulePage: React.FC = () => {
             {/* Month days */}
             {Array.from({ length: daysInMonth }).map((_, i) => {
               const day = i + 1;
-              const isPast = isPastDate(day);
-              const unavailable = !isPast && isDateUnavailable(day);
-              const current = isToday(day);
               const fullDate = getDateStr(day);
+              const isPast = isPastDate(day);
+              const isBooked = !isPast && bookedDates.includes(fullDate);
+              const isManual = !isPast && manualBlackoutDates.includes(fullDate);
+              const unavailable = isBooked || isManual;
+              const current = isToday(day);
               const isSelected = selectedDateStr === fullDate;
 
               return (
@@ -355,11 +419,23 @@ export const ProviderSchedulePage: React.FC = () => {
                   type="button"
                   disabled={isPast}
                   onClick={() => handleDateClick(day)}
-                  title={isPast ? 'Past dates cannot be modified.' : isSelected ? 'Selected date' : 'Click to toggle availability'}
+                  title={
+                    isPast
+                      ? 'Past dates cannot be modified.'
+                      : isBooked
+                      ? 'Reserved for accepted client booking (Locked)'
+                      : isManual
+                      ? 'Marked as manual blackout (Click to remove)'
+                      : isSelected
+                      ? 'Selected date'
+                      : 'Click to toggle availability'
+                  }
                   className={`h-12 sm:h-20 p-1 sm:p-2 rounded-xl sm:rounded-2xl border text-left transition-all flex flex-col justify-between relative overflow-hidden min-w-0 ${
                     isPast
                       ? 'opacity-35 cursor-not-allowed bg-surface-container-low/30 border-surface-container/30 text-outline select-none'
-                      : unavailable
+                      : isBooked
+                      ? 'bg-amber-950/40 border-amber-500/50 text-amber-300 shadow-[0_0_12px_rgba(245,158,11,0.15)] group'
+                      : isManual
                       ? 'bg-rose-950/40 border-rose-500/50 text-rose-300 shadow-[0_0_12px_rgba(244,63,94,0.15)] group'
                       : isSelected
                       ? 'bg-secondary/20 border-secondary text-on-surface ring-1 ring-secondary group'
@@ -378,7 +454,10 @@ export const ProviderSchedulePage: React.FC = () => {
                     >
                       {day}
                     </span>
-                    {unavailable && (
+                    {isBooked && (
+                      <span className="w-1.5 h-1.5 sm:w-2 sm:h-2 rounded-full bg-amber-400 shrink-0" />
+                    )}
+                    {isManual && (
                       <span className="w-1.5 h-1.5 sm:w-2 sm:h-2 rounded-full bg-rose-400 shrink-0" />
                     )}
                     {isPast && (
@@ -389,16 +468,21 @@ export const ProviderSchedulePage: React.FC = () => {
                   <div className="text-[8px] sm:text-[10px] font-medium truncate leading-tight">
                     {isPast ? (
                       <span className="text-outline/60">Past</span>
-                    ) : unavailable ? (
-                      <span className="text-rose-400 font-bold sm:hidden">Off</span>
+                    ) : isBooked ? (
+                      <>
+                        <span className="text-amber-400 font-bold sm:hidden">Booked</span>
+                        <span className="text-amber-400 font-bold hidden sm:inline">Booked Event</span>
+                      </>
+                    ) : isManual ? (
+                      <>
+                        <span className="text-rose-400 font-bold sm:hidden">Off</span>
+                        <span className="text-rose-400 font-bold hidden sm:inline">Blackout</span>
+                      </>
                     ) : (
-                      <span className="text-emerald-400/80 group-hover:text-emerald-300 sm:hidden">Avail</span>
-                    )}
-                    {!isPast && unavailable && (
-                      <span className="text-rose-400 font-bold hidden sm:inline">Unavailable</span>
-                    )}
-                    {!isPast && !unavailable && (
-                      <span className="text-emerald-400/80 group-hover:text-emerald-300 hidden sm:inline">Available</span>
+                      <>
+                        <span className="text-emerald-400/80 group-hover:text-emerald-300 sm:hidden">Avail</span>
+                        <span className="text-emerald-400/80 group-hover:text-emerald-300 hidden sm:inline">Available</span>
+                      </>
                     )}
                   </div>
                 </button>
@@ -407,14 +491,18 @@ export const ProviderSchedulePage: React.FC = () => {
           </div>
 
           {/* Legend */}
-          <div className="pt-4 border-t border-surface-container grid grid-cols-2 sm:flex sm:items-center gap-2.5 sm:gap-6 text-xs text-on-surface-variant">
+          <div className="pt-4 border-t border-surface-container grid grid-cols-2 sm:flex sm:items-center gap-2.5 sm:gap-6 text-xs text-on-surface-variant flex-wrap">
             <div className="flex items-center gap-2">
               <span className="w-2.5 h-2.5 sm:w-3 sm:h-3 rounded-full bg-emerald-400/80 shrink-0" />
               <span className="truncate">Available</span>
             </div>
             <div className="flex items-center gap-2">
+              <span className="w-2.5 h-2.5 sm:w-3 sm:h-3 rounded-full bg-amber-400 shrink-0" />
+              <span className="truncate">Booked Event (Guarded)</span>
+            </div>
+            <div className="flex items-center gap-2">
               <span className="w-2.5 h-2.5 sm:w-3 sm:h-3 rounded-full bg-rose-500 shrink-0" />
-              <span className="truncate">Unavailable / Blackout</span>
+              <span className="truncate">Manual Blackout</span>
             </div>
             <div className="flex items-center gap-2">
               <span className="w-2.5 h-2.5 sm:w-3 sm:h-3 rounded-full bg-primary shrink-0" />
@@ -453,14 +541,26 @@ export const ProviderSchedulePage: React.FC = () => {
                   <span className="text-on-surface-variant">Status:</span>
                   <span
                     className={`font-bold ${
-                      unavailableDates.includes(selectedDateStr) ? 'text-rose-400' : 'text-emerald-400'
+                      bookedDates.includes(selectedDateStr)
+                        ? 'text-amber-400'
+                        : manualBlackoutDates.includes(selectedDateStr)
+                        ? 'text-rose-400'
+                        : 'text-emerald-400'
                     }`}
                   >
-                    {unavailableDates.includes(selectedDateStr) ? 'Marked Unavailable' : 'Available'}
+                    {bookedDates.includes(selectedDateStr)
+                      ? 'Reserved by Client Booking'
+                      : manualBlackoutDates.includes(selectedDateStr)
+                      ? 'Manual Blackout'
+                      : 'Available'}
                   </span>
                 </div>
                 <p className="text-[11px] text-on-surface-variant leading-relaxed">
-                  Click the date again in the calendar grid to toggle between Available and Unavailable.
+                  {bookedDates.includes(selectedDateStr)
+                    ? 'This date is reserved for an accepted client booking and cannot be unblocked here.'
+                    : manualBlackoutDates.includes(selectedDateStr)
+                    ? 'Marked as a manual blackout. Click the date in the grid or list below to remove.'
+                    : 'Date is currently available. Click in the calendar grid to mark as blackout.'}
                 </p>
               </div>
             ) : (
@@ -489,12 +589,12 @@ export const ProviderSchedulePage: React.FC = () => {
             </button>
           </div>
 
-          {/* Active Blackout Dates List */}
+          {/* Active Blackout & Reserved Dates List */}
           <div className="p-4 sm:p-6 rounded-3xl bg-surface-container-high/60 backdrop-blur-xl border border-surface-container-highest/60 shadow-lg space-y-4">
             <div className="flex items-center justify-between">
               <h3 className="text-sm font-bold text-on-surface flex items-center gap-2">
                 <Icon name="block" className="text-rose-400 text-[18px]" />
-                <span>Marked Blackout Dates</span>
+                <span>Unavailable Dates</span>
               </h3>
               <span className="text-xs font-bold text-secondary">
                 {unavailableDates.length} Total
@@ -507,25 +607,53 @@ export const ProviderSchedulePage: React.FC = () => {
               </p>
             ) : (
               <div className="max-h-60 overflow-y-auto space-y-2 pr-1">
-                {unavailableDates.sort().map((dateStr) => (
-                  <div
-                    key={dateStr}
-                    className="p-2.5 rounded-xl bg-surface-container border border-surface-container-highest flex items-center justify-between text-xs"
-                  >
-                    <div className="flex items-center gap-2">
-                      <Icon name="event_busy" className="text-rose-400 text-[16px]" />
-                      <span className="font-medium text-on-surface">{dateStr}</span>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => setUnavailableDates(unavailableDates.filter((d) => d !== dateStr))}
-                      className="text-outline hover:text-error text-xs font-semibold p-1"
-                      title="Remove Blackout"
+                {unavailableDates.sort().map((dateStr) => {
+                  const isBooked = bookedDates.includes(dateStr);
+                  return (
+                    <div
+                      key={dateStr}
+                      className={`p-2.5 rounded-xl border flex items-center justify-between text-xs ${
+                        isBooked
+                          ? 'bg-amber-950/20 border-amber-500/30'
+                          : 'bg-surface-container border-surface-container-highest'
+                      }`}
                     >
-                      ✕
-                    </button>
-                  </div>
-                ))}
+                      <div className="flex items-center gap-2">
+                        <Icon
+                          name={isBooked ? 'event_available' : 'event_busy'}
+                          className={`text-[16px] ${isBooked ? 'text-amber-400' : 'text-rose-400'}`}
+                        />
+                        <span className="font-medium text-on-surface">{dateStr}</span>
+                        {isBooked ? (
+                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 font-semibold">
+                            Booked
+                          </span>
+                        ) : (
+                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-rose-500/20 text-rose-300 font-semibold">
+                            Blackout
+                          </span>
+                        )}
+                      </div>
+                      {!isBooked && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setManualBlackoutDates((prev) => {
+                              const updated = prev.filter((d) => d !== dateStr);
+                              const composite = Array.from(new Set([...updated, ...bookedDates])).filter((d) => d >= todayStr);
+                              setUnavailableDates(composite);
+                              return updated;
+                            });
+                          }}
+                          className="text-outline hover:text-error text-xs font-semibold p-1"
+                          title="Remove Blackout"
+                        >
+                          ✕
+                        </button>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             )}
           </div>
@@ -536,3 +664,4 @@ export const ProviderSchedulePage: React.FC = () => {
 };
 
 export default ProviderSchedulePage;
+

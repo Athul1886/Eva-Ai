@@ -4,7 +4,6 @@ import Icon from '../common/Icon';
 import BookingStatusBadge from './BookingStatusBadge';
 import ContactProviderCard from './ContactProviderCard';
 import { Booking } from '../../types/booking';
-import { MOCK_PROVIDERS } from '../../data/mockProviders';
 import { getDisplayProvider } from '../../utils/providerAuth';
 import { formatIndianRupees } from '../../types/event';
 
@@ -14,26 +13,40 @@ interface BookingCardProps {
 }
 
 export const BookingCard: React.FC<BookingCardProps> = ({ booking, index }) => {
-  // Enrich with display provider (handles registered providers + mock providers)
-  const displayObj = getDisplayProvider(booking.providerId);
-  const provider = displayObj?.provider || MOCK_PROVIDERS.find((p) => p.id === booking.providerId);
+  // Authoritative provider resolution from local cache (if available) or directly from booking
+  const displayObj = booking.providerId ? getDisplayProvider(booking.providerId) : null;
+  const provider = displayObj?.provider;
 
-  const displayName = provider?.name || booking.providerName;
-  const displayCategory = provider?.category || booking.category;
-  const displayLocation = provider?.location || booking.location || 'Kerala';
-  const displayImage =
-    provider?.images?.[0] ||
-    'https://images.unsplash.com/photo-1519741497674-611481863552?auto=format&fit=crop&w=800&q=80';
-  const displayPrice = provider?.startingPrice || booking.startingPrice || 0;
+  const displayName = booking.providerName || provider?.name || 'Service Provider';
+  const displayCategory = booking.category || provider?.category || 'Event Service';
+  const displayLocation = booking.location || provider?.location || '';
+  const displayImage = booking.providerImage || provider?.images?.[0];
+  const displayPrice =
+    booking.price !== undefined && booking.price !== null && !isNaN(Number(booking.price)) && Number(booking.price) > 0
+      ? Number(booking.price)
+      : booking.startingPrice !== undefined && booking.startingPrice !== null && !isNaN(Number(booking.startingPrice)) && Number(booking.startingPrice) > 0
+      ? Number(booking.startingPrice)
+      : provider?.startingPrice || 0;
 
-  // Contact details resolution (uses provider contactDemo or constructs verified fallback)
-  const contactDetails = provider?.contactDemo || {
-    manager: displayObj?.account?.fullName || displayName,
-    phone: displayObj?.account?.phone || '+91 98470 11223',
-    email: displayObj?.account?.email || 'partner@eva-ai.internal',
-    address: `${displayLocation}, Kerala`,
+  const hasPackage = Boolean(booking.packageName || booking.packageDetails?.name);
+  const packageName = booking.packageName || (booking.packageDetails as any)?.name;
+
+  // Contact details resolution (strictly real backend booking data, never fake contact fallbacks or public profile leakage)
+  const isAccepted = booking.status === 'ACCEPTED';
+  const isCompleted = booking.status === 'COMPLETED';
+  const isPending = booking.status === 'PENDING';
+  const isRejected = booking.status === 'REJECTED';
+  const isCancelled = booking.status === 'CANCELLED';
+
+  const isContactUnlocked = isAccepted || isCompleted;
+  const contactDetails = {
+    manager: booking.providerManager || displayName,
+    phone: isContactUnlocked && booking.providerPhone ? booking.providerPhone : '',
+    email: isContactUnlocked && booking.providerEmail ? booking.providerEmail : '',
+    address: booking.providerLocation || displayLocation,
     hours: 'Mon - Sun: 9:00 AM - 8:00 PM',
   };
+
 
   // Format Booking ID
   const displayBookingId = (() => {
@@ -88,11 +101,7 @@ export const BookingCard: React.FC<BookingCardProps> = ({ booking, index }) => {
       ? `${booking.guestCount} Guests`
       : 'Guest count not set';
 
-  const isAccepted = booking.status === 'ACCEPTED';
-  const isCompleted = booking.status === 'COMPLETED';
-  const isPending = booking.status === 'PENDING';
-  const isRejected = booking.status === 'REJECTED';
-  const isCancelled = booking.status === 'CANCELLED';
+
 
   return (
     <div className="rounded-3xl bg-surface-container-high/60 backdrop-blur-xl border border-surface-container-highest/70 hover:border-primary/40 transition-all duration-300 p-6 sm:p-7 shadow-xl space-y-6">
@@ -114,13 +123,19 @@ export const BookingCard: React.FC<BookingCardProps> = ({ booking, index }) => {
       {/* Main Body: Image & Core Details */}
       <div className="flex flex-col md:flex-row gap-5 items-start">
         {/* Thumbnail Image */}
-        <div className="relative w-full md:w-36 h-48 md:h-36 rounded-2xl overflow-hidden bg-surface-container flex-shrink-0 border border-surface-container-highest/50">
-          <img
-            src={displayImage}
-            alt={displayName}
-            className="w-full h-full object-cover object-center group-hover:scale-105 transition-transform duration-500"
-            loading="lazy"
-          />
+        <div className="relative w-full md:w-36 h-48 md:h-36 rounded-2xl overflow-hidden bg-surface-container flex-shrink-0 border border-surface-container-highest/50 flex items-center justify-center">
+          {displayImage ? (
+            <img
+              src={displayImage}
+              alt={displayName}
+              className="w-full h-full object-cover object-center group-hover:scale-105 transition-transform duration-500"
+              loading="lazy"
+            />
+          ) : (
+            <div className="flex flex-col items-center justify-center text-on-surface-variant/40 space-y-1">
+              <Icon name="storefront" className="text-4xl" />
+            </div>
+          )}
           <div className="absolute top-2.5 left-2.5">
             <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full bg-surface-container-lowest/90 text-primary border border-primary/30 backdrop-blur-md">
               {displayCategory}
@@ -131,9 +146,16 @@ export const BookingCard: React.FC<BookingCardProps> = ({ booking, index }) => {
         {/* Info Grid */}
         <div className="flex-1 space-y-3 min-w-0 w-full">
           <div>
-            <h3 className="font-headline-sm text-xl sm:text-2xl font-bold text-on-surface">
-              {displayName}
-            </h3>
+            <div className="flex flex-wrap items-center gap-2">
+              <h3 className="font-headline-sm text-xl sm:text-2xl font-bold text-on-surface">
+                {displayName}
+              </h3>
+              {hasPackage && packageName && (
+                <span className="px-2 py-0.5 rounded-full bg-primary/15 text-primary text-[10px] font-bold uppercase tracking-wider border border-primary/30">
+                  {packageName} Tier
+                </span>
+              )}
+            </div>
             <p className="text-xs text-on-surface-variant flex items-center gap-1 mt-0.5">
               <Icon name="location_on" className="text-primary text-[14px]" />
               <span>{displayLocation}</span>
@@ -160,9 +182,9 @@ export const BookingCard: React.FC<BookingCardProps> = ({ booking, index }) => {
               </span>
             </div>
 
-            <div className="p-2.5 rounded-xl bg-surface-container-low border border-surface-container-highest/50">
-              <span className="text-[10px] uppercase text-on-surface-variant font-medium block">
-                Starting Price
+            <div className={`p-2.5 rounded-xl bg-surface-container-low border ${hasPackage ? 'border-primary/35' : 'border-surface-container-highest/50'}`}>
+              <span className={`text-[10px] uppercase font-medium block ${hasPackage ? 'text-primary font-bold' : 'text-on-surface-variant'}`}>
+                {hasPackage ? (packageName ? `Booked: ${packageName}` : 'Booked Package') : 'Starting Price'}
               </span>
               <span className="font-bold text-primary truncate block mt-0.5">
                 {formatIndianRupees(displayPrice)}

@@ -22,13 +22,20 @@ export const ProviderCard: React.FC<ProviderCardProps> = ({
   return (
     <div className="group relative flex flex-col rounded-3xl bg-surface-container-high/60 backdrop-blur-xl border border-surface-container-highest/60 hover:border-primary/50 transition-all duration-300 overflow-hidden shadow-xl hover:shadow-[0_12px_36px_rgba(0,0,0,0.6)] hover:-translate-y-1">
       {/* Provider Image Container */}
-      <div className="relative h-52 sm:h-56 w-full overflow-hidden bg-surface-container">
-        <img
-          src={provider.images[0]}
-          alt={provider.name}
-          className="w-full h-full object-cover object-center transition-transform duration-700 ease-out group-hover:scale-105"
-          loading="lazy"
-        />
+      <div className="relative h-52 sm:h-56 w-full overflow-hidden bg-surface-container flex items-center justify-center">
+        {provider.images && provider.images[0] ? (
+          <img
+            src={provider.images[0]}
+            alt={provider.name}
+            className="w-full h-full object-cover object-center transition-transform duration-700 ease-out group-hover:scale-105"
+            loading="lazy"
+          />
+        ) : (
+          <div className="flex flex-col items-center justify-center text-on-surface-variant/40 space-y-1">
+            <Icon name="storefront" className="text-4xl" />
+            <span className="text-[10px] font-medium uppercase tracking-wider">No Image</span>
+          </div>
+        )}
 
         {/* Ambient Dark Gradient Over Image */}
         <div className="absolute inset-0 bg-gradient-to-t from-surface-container-high via-surface-container-high/20 to-transparent" />

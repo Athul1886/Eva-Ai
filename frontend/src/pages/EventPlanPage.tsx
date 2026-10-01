@@ -16,10 +16,60 @@ import { eventsApi, bookingsApi, getStoredAccessToken } from '../api/api';
 
 export const EventPlanPage: React.FC = () => {
   // 1. Data States
-  const [eventPlan, setEventPlan] = useState<EventPlanData | null>(null);
-  const [customer, setCustomer] = useState<CustomerProfileData | null>(null);
-  const [selectedServices, setSelectedServices] = useState<SelectedServiceItem[]>([]);
-  const [existingBookings, setExistingBookings] = useState<Booking[]>([]);
+  const [eventPlan, setEventPlan] = useState<EventPlanData | null>(() => {
+    try {
+      const customerSession = getCustomerSession();
+      const custId = customerSession?.customerId || customerSession?.userId;
+      const eventJson = localStorage.getItem('eva_ai_event');
+      if (eventJson) {
+        const parsed = JSON.parse(eventJson);
+        const owner = parsed?.customerId || parsed?.userId;
+        if (!custId || !owner || owner === custId) {
+          return parsed;
+        }
+      }
+    } catch {
+      // ignore
+    }
+    return null;
+  });
+
+  const [customer, setCustomer] = useState<CustomerProfileData | null>(() => {
+    try {
+      const customerJson = localStorage.getItem('eva_ai_customer');
+      if (customerJson) return JSON.parse(customerJson);
+    } catch {
+      // ignore
+    }
+    return null;
+  });
+
+  const [selectedServices, setSelectedServices] = useState<SelectedServiceItem[]>(() => {
+    try {
+      const selectedJson = localStorage.getItem('eva_ai_selected_services');
+      if (selectedJson) {
+        const parsed = JSON.parse(selectedJson);
+        if (Array.isArray(parsed)) return parsed;
+      }
+    } catch {
+      // ignore
+    }
+    return [];
+  });
+
+  const [existingBookings, setExistingBookings] = useState<Booking[]>(() => {
+    try {
+      const bookingsJson = localStorage.getItem('eva_ai_bookings');
+      if (bookingsJson) {
+        const parsed = JSON.parse(bookingsJson);
+        if (Array.isArray(parsed)) return parsed;
+      }
+    } catch {
+      // ignore
+    }
+    return [];
+  });
+
   const [availabilityVersion, setAvailabilityVersion] = useState<number>(0);
   const [backendPlanMetrics, setBackendPlanMetrics] = useState<{
     totalBudget?: number;
@@ -31,7 +81,9 @@ export const EventPlanPage: React.FC = () => {
   } | null>(null);
 
   // 2. UI States
-  const [isLoading, setIsLoading] = useState<boolean>(true);
+  const [isLoading, setIsLoading] = useState<boolean>(() => {
+    return !localStorage.getItem('eva_ai_event');
+  });
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [toastType, setToastType] = useState<'info' | 'success' | 'warning'>('info');
   const [isSending, setIsSending] = useState<boolean>(false);
@@ -42,14 +94,23 @@ export const EventPlanPage: React.FC = () => {
     let isMounted = true;
 
     async function loadPlanData() {
+      const customerSession = getCustomerSession();
+      const custId = customerSession?.customerId || customerSession?.userId;
+
       // A. Read event information from localStorage: eva_ai_event
       let localEvent: EventPlanData | null = null;
       try {
         const eventJson = localStorage.getItem('eva_ai_event');
         if (eventJson) {
-          localEvent = JSON.parse(eventJson);
-          if (isMounted) {
-            setEventPlan(localEvent);
+          const parsed = JSON.parse(eventJson);
+          const owner = parsed?.customerId || parsed?.userId;
+          if (!custId || !owner || owner === custId) {
+            localEvent = parsed;
+            if (isMounted) {
+              setEventPlan(localEvent);
+            }
+          } else {
+            localStorage.removeItem('eva_ai_event');
           }
         }
       } catch (e) {
@@ -125,14 +186,41 @@ export const EventPlanPage: React.FC = () => {
             const eventsList = Array.isArray(rawList) ? rawList : [];
 
             if (eventsList.length > 0) {
-              const latest = eventsList[eventsList.length - 1];
-              backendEvent = extractEventData({ data: latest });
+              const matchingEvents = custId
+                ? eventsList.filter((e: any) => {
+                    const owner = e.customerId || e.userId || e.customer_id || e.user_id;
+                    return !owner || owner === custId;
+                  })
+                : eventsList;
+
+              const active =
+                matchingEvents.length > 0
+                  ? matchingEvents[matchingEvents.length - 1]
+                  : eventsList[eventsList.length - 1];
+
+              backendEvent = extractEventData({ data: active });
             }
           }
 
           if (backendEvent && isMounted) {
-            setEventPlan(backendEvent);
-            localStorage.setItem('eva_ai_event', JSON.stringify(backendEvent));
+            const mergedEvent: EventPlanData = {
+              ...localEvent,
+              ...backendEvent,
+              services:
+                backendEvent.services && backendEvent.services.length > 0
+                  ? backendEvent.services
+                  : (localEvent && (!localEvent.id || localEvent.id === backendEvent.id) && localEvent.services && localEvent.services.length > 0)
+                  ? localEvent.services
+                  : backendEvent.services || [],
+              preferences:
+                backendEvent.preferences && backendEvent.preferences.length > 0
+                  ? backendEvent.preferences
+                  : (localEvent && (!localEvent.id || localEvent.id === backendEvent.id) && localEvent.preferences && localEvent.preferences.length > 0)
+                  ? localEvent.preferences
+                  : backendEvent.preferences || [],
+            };
+            setEventPlan(mergedEvent);
+            localStorage.setItem('eva_ai_event', JSON.stringify(mergedEvent));
 
             // Fetch backend plan summary (GET /events/:id/plan)
             if (backendEvent.id) {
@@ -149,7 +237,7 @@ export const EventPlanPage: React.FC = () => {
                     isOverBudget: typeof planData.isOverBudget === 'boolean' ? planData.isOverBudget : undefined,
                   });
 
-                  // If backend returns shortlisted services (including empty array []), BACKEND WINS
+                  // Parse shortlisted services with full backend alias support
                   const rawBackendServices =
                     planData.services !== undefined
                       ? planData.services
@@ -160,27 +248,62 @@ export const EventPlanPage: React.FC = () => {
                       : planData.items;
 
                   if (Array.isArray(rawBackendServices)) {
-                    const normalized: SelectedServiceItem[] = rawBackendServices.map((s: any) => ({
-                      cartItemId: s.cartItemId || s.id || s.serviceId,
-                      serviceId: s.serviceId || s.id,
-                      providerId: s.providerId || s.id,
-                      providerName: s.providerName || s.name || '',
-                      category: s.category || '',
-                      location: s.location || '',
-                      startingPrice: Number(s.startingPrice || s.price || 0),
-                      selectedAt: s.selectedAt || s.createdAt || new Date().toISOString(),
-                      imageUrl: s.imageUrl || s.images?.[0],
-                      notes: s.notes,
-                      packageDetails: s.packageDetails || s.package,
-                    }));
-                    setSelectedServices(normalized);
-                    localStorage.setItem('eva_ai_selected_services', JSON.stringify(normalized));
+                    if (rawBackendServices.length > 0) {
+                      const normalized: SelectedServiceItem[] = rawBackendServices.map((s: any) => {
+                        const pkg = s.packageDetails || s.package_details || s.package || undefined;
+                        const pkgPrice = Number(pkg?.price || s.price || s.startingPrice || s.starting_price || 0);
+                        const pkgName = s.packageName || s.package_name || pkg?.name || undefined;
+                        const resolvedProviderId =
+                          s.providerId ||
+                          s.provider_id ||
+                          (s.id && !s.cartItemId && !s.cart_item_id && !s.serviceId && !s.service_id ? s.id : '');
+                        const resolvedCartItemId = s.cartItemId || s.cart_item_id || s.id;
+                        const resolvedServiceId = s.serviceId || s.service_id || pkg?.id;
+
+                        return {
+                          cartItemId: resolvedCartItemId,
+                          serviceId: resolvedServiceId,
+                          providerId: resolvedProviderId,
+                          providerName: s.providerName || s.name || '',
+                          packageName: pkgName,
+                          category: s.category || '',
+                          location: s.location || '',
+                          startingPrice: pkgPrice,
+                          price: pkgPrice,
+                          selectedAt: s.selectedAt || s.createdAt || new Date().toISOString(),
+                          imageUrl: s.imageUrl || s.image_url || s.images?.[0],
+                          notes: s.notes || s.additionalNotes || s.additional_notes,
+                          packageDetails: pkg,
+                        };
+                      });
+                      setSelectedServices(normalized);
+                      localStorage.setItem('eva_ai_selected_services', JSON.stringify(normalized));
+                    } else {
+                      // Backend returned empty services array [].
+                      // Only clear local selected services if local storage has no items.
+                      let localItems: SelectedServiceItem[] = [];
+                      try {
+                        const localRaw = localStorage.getItem('eva_ai_selected_services');
+                        if (localRaw) {
+                          const parsed = JSON.parse(localRaw);
+                          if (Array.isArray(parsed)) localItems = parsed;
+                        }
+                      } catch {}
+
+                      if (localItems.length === 0) {
+                        setSelectedServices([]);
+                        localStorage.setItem('eva_ai_selected_services', JSON.stringify([]));
+                      }
+                    }
                   }
                 }
               } catch (planErr) {
                 console.warn('Backend getPlan warning:', planErr);
               }
             }
+          } else if (!backendEvent && isMounted) {
+            setEventPlan(null);
+            localStorage.removeItem('eva_ai_event');
           }
 
           // Fetch authoritative bookings (GET /bookings/my)
@@ -268,9 +391,12 @@ export const EventPlanPage: React.FC = () => {
     }, 3800);
   };
 
-  // Compute live estimated cost
+  // Compute live estimated cost using package tier price or base price
   const estimatedCost = useMemo(() => {
-    return selectedServices.reduce((sum, item) => sum + (Number(item.startingPrice) || 0), 0);
+    return selectedServices.reduce((sum, item) => {
+      const price = Number(item.packageDetails?.price || item.price || item.startingPrice || 0);
+      return sum + price;
+    }, 0);
   }, [selectedServices]);
 
   // Active bookings map for fast lookup: providerId -> booking
@@ -431,15 +557,41 @@ export const EventPlanPage: React.FC = () => {
               const matchedService = freshAvailableServices.find(
                 (s) => s.providerId === b.providerId
               );
+              const resolvedPrice =
+                b.price && b.price > 0
+                  ? b.price
+                  : matchedService?.price && matchedService.price > 0
+                  ? matchedService.price
+                  : matchedService?.startingPrice && matchedService.startingPrice > 0
+                  ? matchedService.startingPrice
+                  : b.startingPrice && b.startingPrice > 0
+                  ? b.startingPrice
+                  : 0;
+              const resolvedPackageName =
+                b.packageName ||
+                matchedService?.packageName ||
+                matchedService?.packageDetails?.name ||
+                undefined;
+              const resolvedPackageDetails =
+                b.packageDetails ||
+                matchedService?.packageDetails ||
+                undefined;
+              const resolvedServiceId =
+                b.serviceId ||
+                matchedService?.serviceId ||
+                undefined;
+
               return {
                 ...b,
                 providerName: b.providerName || matchedService?.providerName || 'Service Provider',
                 category: b.category || matchedService?.category || 'General',
                 location: b.location || matchedService?.location || eventPlan?.location || '',
-                startingPrice:
-                  b.startingPrice && b.startingPrice > 0
-                    ? b.startingPrice
-                    : matchedService?.startingPrice || 0,
+                serviceId: resolvedServiceId,
+                packageName: resolvedPackageName,
+                packageDetails: resolvedPackageDetails,
+                price: resolvedPrice,
+                startingPrice: resolvedPrice,
+                notes: b.notes || matchedService?.notes || (resolvedPackageName ? `Package: ${resolvedPackageName}` : undefined),
                 eventDate: b.eventDate || currentEventDate,
                 eventType: b.eventType || eventPlan?.eventType || 'Celebration',
                 guestCount: b.guestCount || eventPlan?.guestCount,
@@ -588,7 +740,7 @@ export const EventPlanPage: React.FC = () => {
     }
   };
 
-  if (isLoading) {
+  if (isLoading && !eventPlan) {
     return (
       <div className="bg-surface min-h-screen flex items-center justify-center text-on-surface">
         <div className="flex flex-col items-center gap-3">

@@ -7,21 +7,52 @@ import { EventPlanData } from '../types/event';
 import { authApi, ApiError, getStoredAccessToken } from '../api/api';
 
 export const CustomerProfilePage: React.FC = () => {
-  const [profile, setProfile] = useState<CustomerProfileData | null>(null);
+  const initialCachedProfile = getCustomerProfile();
+  const initialSession = getCustomerSession();
+  const resolvedInitialProfile: CustomerProfileData | null = initialCachedProfile || (initialSession ? {
+    fullName: initialSession.fullName || '',
+    email: initialSession.email || '',
+    phone: initialSession.phone || '',
+    location: initialSession.location || '',
+    createdAt: initialSession.loginAt || new Date().toISOString(),
+  } : null);
+
+  const [profile, setProfile] = useState<CustomerProfileData | null>(resolvedInitialProfile);
   const [isEditing, setIsEditing] = useState(false);
   const [editForm, setEditForm] = useState({
-    fullName: '',
-    phone: '',
-    location: '',
+    fullName: resolvedInitialProfile?.fullName || '',
+    phone: resolvedInitialProfile?.phone || '',
+    location: resolvedInitialProfile?.location || '',
   });
   const [toastNotice, setToastNotice] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
 
   // Summary counts
-  const [eventPlan, setEventPlan] = useState<EventPlanData | null>(null);
-  const [bookingsCount, setBookingsCount] = useState<number>(0);
-  const [selectedServicesCount, setSelectedServicesCount] = useState<number>(0);
+  const [eventPlan, setEventPlan] = useState<EventPlanData | null>(() => {
+    try {
+      const raw = localStorage.getItem('eva_ai_event');
+      return raw ? JSON.parse(raw) : null;
+    } catch {
+      return null;
+    }
+  });
+  const [bookingsCount, setBookingsCount] = useState<number>(() => {
+    try {
+      const raw = localStorage.getItem('eva_ai_bookings');
+      return raw && Array.isArray(JSON.parse(raw)) ? JSON.parse(raw).length : 0;
+    } catch {
+      return 0;
+    }
+  });
+  const [selectedServicesCount, setSelectedServicesCount] = useState<number>(() => {
+    try {
+      const raw = localStorage.getItem('eva_ai_selected_services');
+      return raw && Array.isArray(JSON.parse(raw)) ? JSON.parse(raw).length : 0;
+    } catch {
+      return 0;
+    }
+  });
 
   const showToast = (message: string, type: 'success' | 'error' = 'success', duration = 3500) => {
     setToastNotice({ message, type });

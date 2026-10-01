@@ -31,6 +31,34 @@ const getBaseUrl = (): string => {
 
 export const API_BASE_URL = getBaseUrl();
 
+/**
+ * Returns the authoritative deployed public origin for generating public guest URLs.
+ * Ensures QR codes generated even on local dev contain the live public URL rather than localhost:5173.
+ */
+export const getPublicAppOrigin = (): string => {
+  // 1. Explicit frontend app URL in env if provided (VITE_APP_URL / VITE_PUBLIC_APP_URL / VITE_FRONTEND_URL)
+  const envAppUrl =
+    (import.meta as any).env?.VITE_APP_URL ||
+    (import.meta as any).env?.VITE_PUBLIC_APP_URL ||
+    (import.meta as any).env?.VITE_FRONTEND_URL ||
+    (import.meta as any).env?.VITE_PUBLIC_URL;
+
+  if (envAppUrl && typeof envAppUrl === 'string' && envAppUrl.trim()) {
+    return envAppUrl.trim().replace(/\/+$/, '');
+  }
+
+  // 2. Active frontend window origin (e.g. deployed domain or active tunnel)
+  if (typeof window !== 'undefined' && window.location?.origin) {
+    return window.location.origin;
+  }
+  return '';
+};
+
+export const getPublicInvitationUrl = (publicToken: string): string => {
+  const origin = getPublicAppOrigin();
+  return `${origin}/invitation/${publicToken}`;
+};
+
 // ---------------------------------------------------------------------------
 // 2. Authentication Token Storage & Session Helpers
 // ---------------------------------------------------------------------------
@@ -66,7 +94,15 @@ export function getStoredAccessToken(): string | null {
       if (token && typeof token === 'string') return token;
     }
 
-    // 4. Supabase standard persisted session key (sb-*-auth-token)
+    // 4. Admin session object in localStorage
+    const adminSession = localStorage.getItem('eva_ai_admin_session');
+    if (adminSession) {
+      const parsed = JSON.parse(adminSession);
+      const token = parsed?.token || parsed?.accessToken || parsed?.access_token;
+      if (token && typeof token === 'string') return token;
+    }
+
+    // 5. Supabase standard persisted session key (sb-*-auth-token)
     for (let i = 0; i < localStorage.length; i++) {
       const key = localStorage.key(i);
       if (key && (key.startsWith('sb-') || key.includes('supabase')) && key.endsWith('-auth-token')) {
@@ -177,9 +213,11 @@ export function handleAuthFailure(): void {
     setStoredRefreshToken(null);
     localStorage.removeItem('eva_ai_customer_session');
     localStorage.removeItem('eva_ai_provider_session');
+    localStorage.removeItem('eva_ai_admin_session');
     if (typeof window !== 'undefined') {
       window.dispatchEvent(new Event('eva_ai_customer_session_updated'));
       window.dispatchEvent(new Event('eva_ai_provider_session_updated'));
+      window.dispatchEvent(new Event('eva_ai_admin_session_updated'));
     }
   } catch {
     // Ignore storage issues in restricted environments
@@ -268,7 +306,7 @@ export async function getOrStartTokenRefresh(refreshToken: string): Promise<stri
           session.token = newAccessToken;
           localStorage.setItem('eva_ai_customer_session', JSON.stringify(session));
         }
-      } catch {}
+      } catch { }
 
       // Also update provider session object in localStorage if present
       try {
@@ -278,7 +316,7 @@ export async function getOrStartTokenRefresh(refreshToken: string): Promise<stri
           session.token = newAccessToken;
           localStorage.setItem('eva_ai_provider_session', JSON.stringify(session));
         }
-      } catch {}
+      } catch { }
 
       return newAccessToken;
     } catch (err) {
@@ -413,8 +451,13 @@ export async function apiRequest<T = any>(
             const newToken = await getOrStartTokenRefresh(storedRefreshToken);
             if (newToken) {
               // Retry the original failed request exactly once with the new access token
+              const retryHeaders = { ...options.headers };
+              retryHeaders['Authorization'] = `Bearer ${newToken}`;
+              delete retryHeaders['authorization'];
+
               return await apiRequest<T>(endpoint, {
                 ...options,
+                headers: retryHeaders,
                 token: newToken,
                 _retry: true,
               });
@@ -495,8 +538,22 @@ export const API_ENDPOINTS = {
   SERVICES_MY: '/services/my',
   SERVICE_BY_ID: (id: string) => `/services/${id}`,
 
-  // AI Recommendations
+  // Admin
+  ADMIN_DASHBOARD_STATS: '/admin/dashboard/stats',
+  ADMIN_USERS: '/admin/users',
+  ADMIN_PROVIDERS_PENDING: '/admin/providers/pending',
+  ADMIN_PROVIDER_STATUS: (id: string) => `/admin/providers/${id}/status`,
+
+  // AI Recommendations & Chatbot
   RECOMMENDATIONS: '/recommendations',
+  AI_CHAT: '/ai/chat',
+
+  // Invitations & Public Guest Suite
+  INVITATIONS: '/invitations',
+  INVITATION_BY_ID: (id: string) => `/invitations/${id}`,
+  EVENT_INVITATION: (eventId: string) => `/events/${eventId}/invitation`,
+  PUBLIC_INVITATION: (publicToken: string) => `/public/invitations/${publicToken}`,
+  PUBLIC_INVITATION_RSVP: (publicToken: string) => `/public/invitations/${publicToken}/rsvp`,
 } as const;
 
 // ---------------------------------------------------------------------------
@@ -589,7 +646,7 @@ export const authApi = {
       },
     }),
 
-  login: <T = any>(payload: { email: string; password?: string; [key: string]: any }) =>
+  login: <T = any>(payload: { email: string; password?: string;[key: string]: any }) =>
     apiRequest<T>(API_ENDPOINTS.AUTH_LOGIN, { method: 'POST', body: payload }),
 
   getMe: <T = any>() => apiRequest<T>(API_ENDPOINTS.AUTH_ME, { method: 'GET' }),
@@ -647,13 +704,13 @@ export const providersApi = {
   updateProfile: <T = ProviderAccount>(data: Partial<ProviderAccount> | Record<string, any>) =>
     apiRequest<T>(API_ENDPOINTS.PROVIDER_PROFILE, { method: 'PUT', body: data }),
 
-  syncAvailability: <T = any>(data: { dates?: string[]; [key: string]: any }) =>
+  syncAvailability: <T = any>(data: { dates?: string[];[key: string]: any }) =>
     apiRequest<T>(API_ENDPOINTS.PROVIDER_AVAILABILITY_SYNC, { method: 'PUT', body: data }),
 
   getAvailability: <T = any>() =>
     apiRequest<T>(API_ENDPOINTS.PROVIDER_AVAILABILITY, { method: 'GET' }),
 
-  addAvailability: <T = any>(data: { date: string; reason?: string; [key: string]: any }) =>
+  addAvailability: <T = any>(data: { date: string; reason?: string;[key: string]: any }) =>
     apiRequest<T>(API_ENDPOINTS.PROVIDER_AVAILABILITY, { method: 'POST', body: data }),
 
   deleteAvailability: <T = any>(id: string) =>
@@ -662,10 +719,10 @@ export const providersApi = {
   getPortfolio: <T = any[]>() =>
     apiRequest<T>(API_ENDPOINTS.PROVIDER_PORTFOLIO, { method: 'GET' }),
 
-  addPortfolio: <T = any>(data: Record<string, any>) =>
+  addPortfolio: <T = any>(data: FormData | Record<string, any>) =>
     apiRequest<T>(API_ENDPOINTS.PROVIDER_PORTFOLIO, { method: 'POST', body: data }),
 
-  updatePortfolio: <T = any>(id: string, data: Record<string, any>) =>
+  updatePortfolio: <T = any>(id: string, data: FormData | Record<string, any>) =>
     apiRequest<T>(API_ENDPOINTS.PROVIDER_PORTFOLIO_BY_ID(id), { method: 'PUT', body: data }),
 
   deletePortfolio: <T = any>(id: string) =>
@@ -756,11 +813,128 @@ export const servicesApi = {
 };
 
 /**
+ * Admin Endpoints Types & API
+ */
+export interface AdminDashboardStats {
+  totalCustomers: number;
+  totalProviders: number;
+  pendingProviders: number;
+  approvedProviders: number;
+  rejectedProviders: number;
+}
+
+export interface AdminCustomerUser {
+  id: string;
+  fullName: string;
+  email: string;
+  phone?: string;
+  location?: string;
+  isActive: boolean;
+  createdAt: string;
+}
+
+export interface AdminUsersResponse {
+  customers: AdminCustomerUser[];
+}
+
+export const adminApi = {
+  getDashboardStats: <T = AdminDashboardStats>() =>
+    apiRequest<T>(API_ENDPOINTS.ADMIN_DASHBOARD_STATS, { method: 'GET' }),
+
+  getUsers: <T = AdminUsersResponse>() =>
+    apiRequest<T>(API_ENDPOINTS.ADMIN_USERS, { method: 'GET' }),
+
+  getPendingProviders: <T = any>() =>
+    apiRequest<T>(API_ENDPOINTS.ADMIN_PROVIDERS_PENDING, { method: 'GET' }),
+
+  updateProviderStatus: <T = any>(
+    providerId: string,
+    status: 'PENDING' | 'APPROVED' | 'REJECTED' | 'SUSPENDED' | string
+  ) =>
+    apiRequest<T>(API_ENDPOINTS.ADMIN_PROVIDER_STATUS(providerId), {
+      method: 'PATCH',
+      body: { status },
+    }),
+};
+
+/**
  * AI Recommendations Endpoints API
  */
 export const recommendationsApi = {
   getRecommendations: <T = AIRecommendationResponse>(payload: AIRecommendationRequest) =>
     apiRequest<T>(API_ENDPOINTS.RECOMMENDATIONS, { method: 'POST', body: payload }),
+};
+
+/**
+ * AI Chatbot Types & API
+ */
+export interface AiChatRecommendation {
+  providerId: string;
+  serviceId?: string;
+  providerName?: string;
+  serviceName?: string;
+  category?: string;
+  location?: string;
+  startingPrice?: number;
+  rating?: number;
+  experience?: number;
+}
+
+export interface AiChatAction {
+  type: string;
+  providerId?: string;
+  [key: string]: any;
+}
+
+export interface AiChatResponse {
+  success: boolean;
+  message: string;
+  recommendations?: AiChatRecommendation[];
+  actions?: AiChatAction[];
+}
+
+export interface AiChatRequest {
+  message: string;
+  eventId?: string;
+  conversationId?: string;
+}
+
+export const aiApi = {
+  chat: <T = AiChatResponse>(payload: AiChatRequest) =>
+    apiRequest<T>(API_ENDPOINTS.AI_CHAT, { method: 'POST', body: payload }),
+};
+
+/**
+ * Invitations Endpoints API
+ */
+export const invitationsApi = {
+  create: <T = any>(data: Record<string, any>) =>
+    apiRequest<T>(API_ENDPOINTS.INVITATIONS, { method: 'POST', body: data }),
+
+  createForEvent: <T = any>(eventId: string, data: Record<string, any>) =>
+    apiRequest<T>(API_ENDPOINTS.EVENT_INVITATION(eventId), { method: 'POST', body: data }),
+
+  getByEventId: <T = any>(eventId: string) =>
+    apiRequest<T>(API_ENDPOINTS.EVENT_INVITATION(eventId), { method: 'GET' }),
+
+  getById: <T = any>(id: string) =>
+    apiRequest<T>(API_ENDPOINTS.INVITATION_BY_ID(id), { method: 'GET' }),
+
+  getMy: <T = any>() =>
+    apiRequest<T>(API_ENDPOINTS.INVITATIONS, { method: 'GET' }),
+
+  update: <T = any>(id: string, data: Record<string, any>) =>
+    apiRequest<T>(API_ENDPOINTS.INVITATION_BY_ID(id), { method: 'PUT', body: data }),
+
+  getPublicByToken: <T = any>(publicToken: string) =>
+    apiRequest<T>(API_ENDPOINTS.PUBLIC_INVITATION(publicToken), { method: 'GET', token: null }),
+
+  submitRsvp: <T = any>(publicToken: string, rsvpData: Record<string, any>) =>
+    apiRequest<T>(API_ENDPOINTS.PUBLIC_INVITATION_RSVP(publicToken), {
+      method: 'POST',
+      body: rsvpData,
+      token: null,
+    }),
 };
 
 export default {
@@ -776,5 +950,8 @@ export default {
   events: eventsApi,
   bookings: bookingsApi,
   services: servicesApi,
+  admin: adminApi,
   recommendations: recommendationsApi,
+  ai: aiApi,
+  invitations: invitationsApi,
 };

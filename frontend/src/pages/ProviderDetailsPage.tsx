@@ -1,15 +1,16 @@
 import React, { useEffect, useState } from 'react';
 import { Link, useParams, useNavigate } from 'react-router-dom';
 import Icon from '../components/common/Icon';
-import { Provider, SelectedServiceItem } from '../types/service';
+import { Provider, ProviderPackage, SelectedServiceItem } from '../types/service';
 import { ProviderAccount } from '../types/provider';
-import { EventPlanData, formatIndianRupees } from '../types/event';
+import { EventPlanData, extractEventData, formatIndianRupees } from '../types/event';
 import { Booking } from '../types/booking';
 import {
   isProviderAvailable,
   getDisplayProvider,
   fetchAndCacheProviderAvailability,
   fetchAndCacheProviderDetails,
+  normalizeProviderCategory,
 } from '../utils/providerAuth';
 import { eventsApi, getStoredAccessToken } from '../api/api';
 
@@ -19,29 +20,53 @@ export const ProviderDetailsPage: React.FC = () => {
 
   const [provider, setProvider] = useState<Provider | null>(null);
   const [account, setAccount] = useState<ProviderAccount | null>(null);
-  const [activeImageIndex, setActiveImageIndex] = useState<number>(0);
+  const [selectedPackage, setSelectedPackage] = useState<ProviderPackage | null>(null);
+  const [selectedGalleryImageUrl, setSelectedGalleryImageUrl] = useState<string | null>(null);
   const [selectedServices, setSelectedServices] = useState<SelectedServiceItem[]>([]);
   const [eventPlan, setEventPlan] = useState<EventPlanData | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [isContactUnlocked, setIsContactUnlocked] = useState<boolean>(false);
   const [, setAvailabilityVersion] = useState<number>(0);
 
+  // Reset selected gallery image and package when navigating between different providers
+  useEffect(() => {
+    setSelectedGalleryImageUrl(null);
+    setSelectedPackage(null);
+  }, [providerId]);
+
+  // Synchronize package selection when provider packages load
+  useEffect(() => {
+    if (provider?.packages && provider.packages.length === 1) {
+      setSelectedPackage(provider.packages[0]);
+    } else if (provider?.packages && provider.packages.length > 1) {
+      setSelectedPackage((prev) => {
+        if (!prev) return null;
+        const exists = provider.packages.find((p) => p.name === prev.name);
+        return exists || null;
+      });
+    } else {
+      setSelectedPackage(null);
+    }
+  }, [provider]);
+
   // Load provider & local storage data
   useEffect(() => {
+    let isMounted = true;
+
     const reloadProvider = () => {
       if (providerId) {
         const disp = getDisplayProvider(providerId);
-        if (disp) {
+        if (disp && isMounted) {
           setProvider(disp.provider);
           setAccount(disp.account);
-        } else {
+        } else if (isMounted) {
           setProvider(null);
           setAccount(null);
         }
 
         // Authoritative backend fetch
         fetchAndCacheProviderDetails(providerId).then((fresh) => {
-          if (fresh) {
+          if (fresh && isMounted) {
             setProvider(fresh.provider);
             setAccount(fresh.account);
           }
@@ -51,29 +76,72 @@ export const ProviderDetailsPage: React.FC = () => {
 
     reloadProvider();
 
-    try {
-      const selectedJson = localStorage.getItem('eva_ai_selected_services');
-      if (selectedJson) {
-        setSelectedServices(JSON.parse(selectedJson));
+    // 1. Load selected services from localStorage
+    const loadSelectedServices = () => {
+      try {
+        const selectedJson = localStorage.getItem('eva_ai_selected_services');
+        if (selectedJson && isMounted) {
+          const parsed = JSON.parse(selectedJson);
+          if (Array.isArray(parsed)) {
+            setSelectedServices(parsed);
+          }
+        }
+      } catch (e) {
+        console.warn('Failed to parse eva_ai_selected_services:', e);
       }
-    } catch (e) {
-      console.warn('Failed to parse eva_ai_selected_services:', e);
-    }
+    };
 
-    try {
-      const eventJson = localStorage.getItem('eva_ai_event');
-      if (eventJson) {
-        setEventPlan(JSON.parse(eventJson));
+    loadSelectedServices();
+
+    // 2. Authoritative Event Plan Resolution
+    const syncActiveEvent = async () => {
+      let resolvedEvent: EventPlanData | null = null;
+      try {
+        const eventJson = localStorage.getItem('eva_ai_event');
+        if (eventJson) {
+          resolvedEvent = extractEventData(JSON.parse(eventJson));
+          if (resolvedEvent && isMounted) {
+            setEventPlan(resolvedEvent);
+          }
+        }
+      } catch (e) {
+        console.warn('Failed to parse eva_ai_event:', e);
       }
-    } catch (e) {
-      console.warn('Failed to parse eva_ai_event:', e);
-    }
+
+      // If no valid event ID found in localStorage and customer has auth token, rehydrate from backend
+      const token = getStoredAccessToken();
+      if ((!resolvedEvent || !resolvedEvent.id) && token) {
+        try {
+          const listRes = await eventsApi.getAll();
+          const rawData: any = listRes?.data;
+          const rawList =
+            rawData?.events ||
+            (Array.isArray(rawData) ? rawData : null) ||
+            (listRes as any)?.events ||
+            (Array.isArray(listRes) ? listRes : []);
+          const eventsList = Array.isArray(rawList) ? rawList : [];
+
+          if (eventsList.length > 0) {
+            const latest = eventsList[eventsList.length - 1];
+            const backendEvent = extractEventData({ data: latest });
+            if (backendEvent?.id && isMounted) {
+              setEventPlan(backendEvent);
+              localStorage.setItem('eva_ai_event', JSON.stringify(backendEvent));
+            }
+          }
+        } catch (apiErr) {
+          console.warn('Failed to rehydrate active customer event in provider details:', apiErr);
+        }
+      }
+    };
+
+    syncActiveEvent();
 
     // Check if an accepted booking exists for this provider in localStorage: eva_ai_bookings
     const checkContactUnlocked = () => {
       try {
         const bookingsJson = localStorage.getItem('eva_ai_bookings');
-        if (bookingsJson) {
+        if (bookingsJson && isMounted) {
           const parsed = JSON.parse(bookingsJson);
           if (Array.isArray(parsed)) {
             const hasAccepted = parsed.some(
@@ -85,7 +153,7 @@ export const ProviderDetailsPage: React.FC = () => {
           } else {
             setIsContactUnlocked(false);
           }
-        } else {
+        } else if (isMounted) {
           setIsContactUnlocked(false);
         }
       } catch (e) {
@@ -100,26 +168,39 @@ export const ProviderDetailsPage: React.FC = () => {
       try {
         const eventJson = localStorage.getItem('eva_ai_event');
         if (eventJson) {
-          setEventPlan(JSON.parse(eventJson));
+          const parsed = extractEventData(JSON.parse(eventJson));
+          if (parsed && isMounted) {
+            setEventPlan(parsed);
+          }
         }
       } catch (e) {
         console.warn('Failed to parse eva_ai_event:', e);
       }
-      setAvailabilityVersion((v) => v + 1);
+      if (isMounted) {
+        setAvailabilityVersion((v) => v + 1);
+      }
       reloadProvider();
       if (providerId) {
         fetchAndCacheProviderAvailability(providerId)
           .then(() => {
-            setAvailabilityVersion((v) => v + 1);
+            if (isMounted) {
+              setAvailabilityVersion((v) => v + 1);
+            }
           })
           .catch(() => {});
       }
     };
 
+    const handleServicesUpdated = () => {
+      loadSelectedServices();
+    };
+
     if (providerId) {
       fetchAndCacheProviderAvailability(providerId)
         .then(() => {
-          setAvailabilityVersion((v) => v + 1);
+          if (isMounted) {
+            setAvailabilityVersion((v) => v + 1);
+          }
         })
         .catch(() => {});
     }
@@ -128,13 +209,16 @@ export const ProviderDetailsPage: React.FC = () => {
     window.addEventListener('eva_ai_provider_availability_updated', handleAvailabilityUpdate);
     window.addEventListener('eva_ai_provider_profile_updated', reloadProvider);
     window.addEventListener('eva_ai_bookings_updated', checkContactUnlocked);
+    window.addEventListener('eva_ai_selected_services_updated', handleServicesUpdated);
     window.addEventListener('storage', handleAvailabilityUpdate);
 
     return () => {
+      isMounted = false;
       window.removeEventListener('eva_ai_availability_updated', handleAvailabilityUpdate);
       window.removeEventListener('eva_ai_provider_availability_updated', handleAvailabilityUpdate);
       window.removeEventListener('eva_ai_provider_profile_updated', reloadProvider);
       window.removeEventListener('eva_ai_bookings_updated', checkContactUnlocked);
+      window.removeEventListener('eva_ai_selected_services_updated', handleServicesUpdated);
       window.removeEventListener('storage', handleAvailabilityUpdate);
     };
   }, [providerId]);
@@ -161,43 +245,135 @@ export const ProviderDetailsPage: React.FC = () => {
       return;
     }
 
+    // If provider offers package tiers, require selecting one
+    if (provider.packages && provider.packages.length > 0 && !selectedPackage) {
+      showToast('Please select a service package to continue.');
+      return;
+    }
+
     if (isAdding) return;
     setIsAdding(true);
 
     try {
-      let backendCartItemId: string | undefined = undefined;
       const token = getStoredAccessToken();
+      if (!token) {
+        showToast('Please log in to add services to your event plan.');
+        return;
+      }
 
-      if (token && eventPlan?.id) {
+      // Ensure we have a valid real backend event UUID
+      let activeEventId = eventPlan?.id;
+      if (!activeEventId) {
         try {
-          const res = await eventsApi.addService(eventPlan.id, {
-            providerId: provider.id,
-            providerName: provider.name,
-            category: provider.category,
-            location: provider.location,
-            startingPrice: provider.startingPrice,
-            imageUrl: provider.images[0],
-          });
-          backendCartItemId =
-            res?.data?.cartItemId ||
-            res?.data?.id ||
-            res?.data?.serviceId ||
-            (res as any)?.cartItemId ||
-            (res as any)?.id;
-        } catch (apiErr: any) {
-          console.warn('Backend addService warning in provider details:', apiErr);
+          const listRes = await eventsApi.getAll();
+          const rawData: any = listRes?.data;
+          const rawList =
+            rawData?.events ||
+            (Array.isArray(rawData) ? rawData : null) ||
+            (listRes as any)?.events ||
+            (Array.isArray(listRes) ? listRes : []);
+          const eventsList = Array.isArray(rawList) ? rawList : [];
+
+          if (eventsList.length > 0) {
+            const latest = eventsList[eventsList.length - 1];
+            const backendEvent = extractEventData({ data: latest });
+            if (backendEvent?.id) {
+              setEventPlan(backendEvent);
+              localStorage.setItem('eva_ai_event', JSON.stringify(backendEvent));
+              activeEventId = backendEvent.id;
+            }
+          }
+        } catch (err) {
+          console.warn('Failed to resolve active event ID on add:', err);
         }
       }
 
-      const newItem: SelectedServiceItem = {
-        cartItemId: backendCartItemId,
+      if (!activeEventId) {
+        showToast('Please open your event plan and try again.');
+        return;
+      }
+
+      const chosenPrice = selectedPackage ? selectedPackage.price : provider.startingPrice;
+      const chosenName = selectedPackage ? selectedPackage.name : undefined;
+
+      const isValidUuid = (val?: any): boolean => {
+        if (!val || typeof val !== 'string') return false;
+        return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(val.trim());
+      };
+
+      const addPayload: Record<string, any> = {
         providerId: provider.id,
         providerName: provider.name,
         category: provider.category,
         location: provider.location,
-        startingPrice: provider.startingPrice,
+        startingPrice: chosenPrice,
+        price: chosenPrice,
+        imageUrl: provider.images[0],
+      };
+
+      // Only include candidate serviceId if it is a strictly valid UUID
+      const candidateServiceId =
+        (selectedPackage && isValidUuid((selectedPackage as any).serviceId) ? (selectedPackage as any).serviceId : undefined) ||
+        (selectedPackage && isValidUuid(selectedPackage.id) ? selectedPackage.id : undefined) ||
+        ((provider as any)?.serviceId && isValidUuid((provider as any).serviceId) ? (provider as any).serviceId : undefined);
+
+      if (candidateServiceId) {
+        addPayload.serviceId = candidateServiceId;
+      }
+
+      if (selectedPackage) {
+        addPayload.packageDetails = selectedPackage;
+        addPayload.notes = `Package: ${selectedPackage.name}`;
+        if (selectedPackage.name) {
+          addPayload.packageName = selectedPackage.name;
+        }
+      }
+
+      let backendCartItemId: string | undefined = undefined;
+      let backendResolvedServiceId: string | undefined = candidateServiceId;
+
+      try {
+        const res = await eventsApi.addService(activeEventId, addPayload);
+        backendCartItemId =
+          res?.data?.id ||
+          res?.service?.id ||
+          res?.data?.cartItemId ||
+          (res as any)?.cartItemId ||
+          (res as any)?.id;
+
+        const resolvedIdFromBackend =
+          res?.data?.serviceId ||
+          res?.service?.serviceId ||
+          res?.data?.service_id ||
+          res?.service?.service_id;
+
+        if (isValidUuid(resolvedIdFromBackend)) {
+          backendResolvedServiceId = resolvedIdFromBackend;
+        }
+      } catch (apiErr: any) {
+        console.error('Backend addService error in provider details:', apiErr);
+        const errMessage =
+          apiErr?.message ||
+          apiErr?.responseBody?.message ||
+          'Failed to add service to your event plan. Please try again.';
+        showToast(errMessage);
+        return;
+      }
+
+      const newItem: SelectedServiceItem = {
+        cartItemId: backendCartItemId,
+        serviceId: backendResolvedServiceId,
+        providerId: provider.id,
+        providerName: provider.name,
+        packageName: chosenName,
+        category: provider.category,
+        location: provider.location,
+        startingPrice: chosenPrice,
+        price: chosenPrice,
         selectedAt: new Date().toISOString(),
         imageUrl: provider.images[0],
+        packageDetails: selectedPackage || undefined,
+        notes: selectedPackage ? `Package: ${selectedPackage.name}` : undefined,
       };
 
       const updated = [...selectedServices, newItem];
@@ -206,7 +382,11 @@ export const ProviderDetailsPage: React.FC = () => {
       try {
         localStorage.setItem('eva_ai_selected_services', JSON.stringify(updated));
         window.dispatchEvent(new Event('eva_ai_selected_services_updated'));
-        showToast(`Added ${provider.name} to your event plan ✓`);
+        showToast(
+          selectedPackage
+            ? `Added ${provider.name} (${selectedPackage.name}) to your event plan ✓`
+            : `Added ${provider.name} to your event plan ✓`
+        );
       } catch (e) {
         console.warn('Failed to save to localStorage:', e);
       }
@@ -264,6 +444,14 @@ export const ProviderDetailsPage: React.FC = () => {
     );
   }
 
+  const galleryImages = Array.isArray(provider.images)
+    ? provider.images.filter((img): img is string => typeof img === 'string' && img.trim().length > 0)
+    : [];
+  const activeImageUrl =
+    selectedGalleryImageUrl && galleryImages.includes(selectedGalleryImageUrl)
+      ? selectedGalleryImageUrl
+      : (galleryImages[0] || '');
+
   return (
     <div className="bg-surface font-body-md text-on-surface antialiased min-h-screen flex flex-col selection:bg-primary-container selection:text-on-primary">
       {/* Toast Notification */}
@@ -298,65 +486,81 @@ export const ProviderDetailsPage: React.FC = () => {
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
             {/* Left Column: Image Gallery (7 cols) */}
             <div className="lg:col-span-7 space-y-4">
-              {/* Main Feature Image */}
-              <div className="relative h-[340px] sm:h-[460px] w-full rounded-3xl overflow-hidden bg-surface-container border border-surface-container-highest/60 shadow-2xl">
-                <img
-                  src={provider.images[activeImageIndex] || provider.images[0]}
-                  alt={`${provider.name} portfolio preview`}
-                  className="w-full h-full object-cover object-center transition-all duration-500"
-                />
-
-                <div className="absolute inset-0 bg-gradient-to-t from-surface-container-high/90 via-transparent to-transparent pointer-events-none" />
-
-                {/* Category & Location Badges */}
-                <div className="absolute top-4 left-4 flex flex-wrap items-center gap-2">
-                  <span className="px-3.5 py-1.5 rounded-full bg-surface-container-lowest/90 backdrop-blur-md text-primary font-bold text-xs uppercase tracking-wider border border-primary/30 shadow-lg">
-                    {provider.category}
-                  </span>
-                  <span className="inline-flex items-center gap-1 px-3 py-1.5 rounded-full bg-surface-container-lowest/90 backdrop-blur-md text-on-surface font-semibold text-xs border border-surface-container-highest/60 shadow-lg">
-                    <Icon name="location_on" className="text-primary text-[14px]" />
-                    <span>{provider.location}, Kerala</span>
-                  </span>
-                </div>
-
-                {/* Experience Badge */}
-                <div className="absolute bottom-4 left-4 flex items-center gap-2">
-                  <span className="px-3 py-1 rounded-xl bg-surface-container-lowest/90 backdrop-blur-md text-xs font-semibold text-on-surface border border-surface-container-highest/60">
-                    {provider.yearsExperience} Years Industry Experience
-                  </span>
-                  <span className="px-3 py-1 rounded-xl bg-primary/20 backdrop-blur-md text-xs font-bold text-primary border border-primary/30">
-                    Verified Partner (Demo)
-                  </span>
-                </div>
-              </div>
-
-              {/* Thumbnail Selector */}
-              {provider.images.length > 1 && (
-                <div className="flex items-center gap-3 overflow-x-auto pb-2">
-                  {provider.images.map((img, idx) => (
-                    <button
-                      key={img}
-                      type="button"
-                      onClick={() => setActiveImageIndex(idx)}
-                      className={`relative w-24 h-18 sm:w-28 sm:h-20 rounded-xl overflow-hidden flex-shrink-0 transition-all border-2 ${
-                        activeImageIndex === idx
-                          ? 'border-primary ring-2 ring-primary/40 scale-105'
-                          : 'border-surface-container-highest/70 opacity-60 hover:opacity-100'
-                      }`}
-                    >
+                  {/* Main Feature Image */}
+                  <div className="relative h-[340px] sm:h-[460px] w-full rounded-3xl overflow-hidden bg-surface-container border border-surface-container-highest/60 shadow-2xl flex items-center justify-center">
+                    {activeImageUrl ? (
                       <img
-                        src={img}
-                        alt={`Thumbnail ${idx + 1}`}
-                        className="w-full h-full object-cover"
+                        key={activeImageUrl}
+                        src={activeImageUrl}
+                        alt={`${provider.name} profile preview`}
+                        className="w-full h-full object-cover object-center transition-all duration-300"
                       />
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
+                    ) : (
+                      <div className="flex flex-col items-center justify-center text-on-surface-variant/40 space-y-2 p-6 text-center">
+                        <Icon name="storefront" className="text-5xl" />
+                        <span className="text-xs font-medium">No Image Uploaded</span>
+                      </div>
+                    )}
 
-            {/* Right Column: Key Details & Booking Card (5 cols) */}
-            <div className="lg:col-span-5 space-y-6">
+                    <div className="absolute inset-0 bg-gradient-to-t from-surface-container-high/90 via-transparent to-transparent pointer-events-none" />
+
+                    {/* Category & Location Badges */}
+                    <div className="absolute top-4 left-4 flex flex-wrap items-center gap-2">
+                      <span className="px-3.5 py-1.5 rounded-full bg-surface-container-lowest/90 backdrop-blur-md text-primary font-bold text-xs uppercase tracking-wider border border-primary/30 shadow-lg">
+                        {provider.category}
+                      </span>
+                      {provider.location && (
+                        <span className="inline-flex items-center gap-1 px-3 py-1.5 rounded-full bg-surface-container-lowest/90 backdrop-blur-md text-on-surface font-semibold text-xs border border-surface-container-highest/60 shadow-lg">
+                          <Icon name="location_on" className="text-primary text-[14px]" />
+                          <span>{provider.location}</span>
+                        </span>
+                      )}
+                    </div>
+
+                    {/* Experience Badge */}
+                    <div className="absolute bottom-4 left-4 flex items-center gap-2">
+                      <span className="px-3 py-1 rounded-xl bg-surface-container-lowest/90 backdrop-blur-md text-xs font-semibold text-on-surface border border-surface-container-highest/60">
+                        {provider.yearsExperience} {provider.yearsExperience === 1 ? 'Year' : 'Years'} Experience
+                      </span>
+                      {account?.approvalStatus === 'APPROVED' && (
+                        <span className="px-3 py-1 rounded-xl bg-emerald-500/20 backdrop-blur-md text-xs font-bold text-emerald-400 border border-emerald-500/30">
+                          Verified Partner
+                        </span>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Thumbnail Selector */}
+                  {galleryImages.length > 1 && (
+                    <div className="flex items-center gap-3 overflow-x-auto pb-2">
+                      {galleryImages.map((img, idx) => {
+                        const isSelected = img === activeImageUrl;
+                        return (
+                          <button
+                            key={img || idx}
+                            type="button"
+                            onClick={() => setSelectedGalleryImageUrl(img)}
+                            className={`relative w-24 h-18 sm:w-28 sm:h-20 rounded-xl overflow-hidden flex-shrink-0 transition-all border-2 ${
+                              isSelected
+                                ? 'border-primary ring-2 ring-primary/40 scale-105'
+                                : 'border-surface-container-highest/70 opacity-60 hover:opacity-100'
+                            }`}
+                            aria-label={`Select photo ${idx + 1}`}
+                          >
+                            <img
+                              src={img}
+                              alt={`Thumbnail ${idx + 1}`}
+                              className="w-full h-full object-cover"
+                            />
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+
+                {/* Right Column: Key Details & Booking Card (5 cols) */}
+                <div className="lg:col-span-5 space-y-6">
               {/* Core Profile Card */}
               <div className="rounded-3xl bg-surface-container-high/70 backdrop-blur-xl border border-surface-container-highest/70 p-6 sm:p-8 shadow-2xl space-y-6">
                 <div>
@@ -382,9 +586,17 @@ export const ProviderDetailsPage: React.FC = () => {
                     </span>
                   </div>
 
-                  <h1 className="font-headline-sm text-2xl sm:text-3xl font-bold text-on-surface mt-2">
-                    {provider.name}
-                  </h1>
+                  <div className="space-y-1 mt-2">
+                    <h1 className="font-headline-sm text-2xl sm:text-3xl font-bold text-on-surface">
+                      {provider.name}
+                    </h1>
+                    {account?.fullName && account.businessName && account.fullName.trim().toLowerCase() !== account.businessName.trim().toLowerCase() && (
+                      <p className="text-xs text-on-surface-variant flex items-center gap-1.5 pt-0.5 font-medium">
+                        <Icon name="badge" className="text-[14px] text-primary" />
+                        <span>Managed by <strong className="text-on-surface font-semibold">{account.fullName}</strong></span>
+                      </p>
+                    )}
+                  </div>
 
                   <p className="text-xs sm:text-sm text-on-surface-variant mt-2 leading-relaxed">
                     {provider.description}
@@ -392,19 +604,52 @@ export const ProviderDetailsPage: React.FC = () => {
                 </div>
 
                 {/* Pricing Highlight Box */}
-                <div className="p-4 rounded-2xl bg-surface-container-low border border-primary/25 space-y-1">
-                  <span className="text-[11px] uppercase tracking-wider text-on-surface-variant font-medium block">
-                    Starting Package Price
-                  </span>
-                  <div className="flex items-baseline gap-2">
-                    <span className="font-headline-sm text-3xl font-bold text-primary">
-                      {formatIndianRupees(provider.startingPrice)}
-                    </span>
-                    <span className="text-xs text-on-surface-variant">base package</span>
-                  </div>
-                  <div className="text-xs text-on-surface-variant/80 pt-1">
-                    Price Range: <span className="text-on-surface font-semibold">{provider.priceRange}</span>
-                  </div>
+                <div className="p-4 rounded-2xl bg-surface-container-low border border-primary/25 space-y-1.5">
+                  {selectedPackage ? (
+                    <>
+                      <div className="flex items-center justify-between">
+                        <span className="text-[11px] uppercase tracking-wider text-primary font-bold flex items-center gap-1">
+                          <Icon name="sell" className="text-[14px]" />
+                          <span>Selected: {selectedPackage.name}</span>
+                        </span>
+                        <span className="px-2 py-0.5 rounded-full bg-primary/20 text-primary font-bold text-[10px] uppercase tracking-wider">
+                          Package
+                        </span>
+                      </div>
+                      <div className="flex items-baseline gap-2">
+                        <span className="font-headline-sm text-3xl font-bold text-primary">
+                          {formatIndianRupees(selectedPackage.price)}
+                        </span>
+                        <span className="text-xs text-on-surface-variant">selected tier</span>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <span className="text-[11px] uppercase tracking-wider text-on-surface-variant font-medium block">
+                        Starting Package Price
+                      </span>
+                      <div className="flex items-baseline gap-2">
+                        <span className="font-headline-sm text-3xl font-bold text-primary">
+                          {provider.startingPrice > 0 ? formatIndianRupees(provider.startingPrice) : 'Contact for pricing'}
+                        </span>
+                        {provider.startingPrice > 0 && (
+                          <span className="text-xs text-on-surface-variant">
+                            {provider.packages && provider.packages.length > 0 ? 'from' : 'base package'}
+                          </span>
+                        )}
+                      </div>
+                      {provider.packages && provider.packages.length > 1 && (
+                        <p className="text-[11px] text-primary/90 font-medium pt-0.5">
+                          Select a package tier below to continue
+                        </p>
+                      )}
+                    </>
+                  )}
+                  {provider.priceRange && (
+                    <div className="text-xs text-on-surface-variant/80 pt-1">
+                      Price Range: <span className="text-on-surface font-semibold">{provider.priceRange}</span>
+                    </div>
+                  )}
                 </div>
 
                 {/* Primary CTA: Add to Event Plan */}
@@ -423,10 +668,12 @@ export const ProviderDetailsPage: React.FC = () => {
                     <button
                       type="button"
                       onClick={handleAddToEvent}
-                      disabled={isAdded}
+                      disabled={isAdded || (provider.packages && provider.packages.length > 0 && !selectedPackage)}
                       className={`w-full py-4 rounded-2xl font-title-md text-sm sm:text-base font-bold transition-all flex items-center justify-center gap-2 ${
                         isAdded
                           ? 'bg-secondary-container/60 text-secondary border border-secondary-container cursor-default shadow-md'
+                          : provider.packages && provider.packages.length > 0 && !selectedPackage
+                          ? 'bg-surface-container text-on-surface-variant border border-surface-container-highest/80 hover:border-primary/50 cursor-pointer'
                           : 'bg-primary hover:bg-tertiary text-on-primary shadow-[0_0_25px_rgba(242,202,80,0.3)] hover:shadow-[0_0_35px_rgba(242,202,80,0.5)] active:scale-[0.98]'
                       }`}
                     >
@@ -435,10 +682,19 @@ export const ProviderDetailsPage: React.FC = () => {
                           <Icon name="check_circle" className="text-[20px]" />
                           <span>Added to Your Event Plan ✓</span>
                         </>
+                      ) : provider.packages && provider.packages.length > 0 && !selectedPackage ? (
+                        <>
+                          <Icon name="touch_app" className="text-[20px]" />
+                          <span>Select a Package to Continue</span>
+                        </>
                       ) : (
                         <>
                           <Icon name="add_circle" className="text-[20px]" />
-                          <span>Add to Event Plan</span>
+                          <span>
+                            {selectedPackage
+                              ? `Add ${selectedPackage.name} to Event Plan`
+                              : 'Add to Event Plan'}
+                          </span>
                         </>
                       )}
                     </button>
@@ -447,6 +703,8 @@ export const ProviderDetailsPage: React.FC = () => {
                   <p className="text-[11px] text-center text-on-surface-variant/70 italic">
                     {!isAvailable
                       ? 'This provider cannot be added because they have marked your event date as unavailable.'
+                      : provider.packages && provider.packages.length > 0 && !selectedPackage
+                      ? 'Please select one of the curated package tiers below to continue.'
                       : 'Adding to your event plan preserves this provider for your budget estimate without immediate commitment.'}
                   </p>
                 </div>
@@ -455,11 +713,13 @@ export const ProviderDetailsPage: React.FC = () => {
                 <div className="grid grid-cols-2 gap-3 pt-2 border-t border-surface-container-highest/60 text-xs">
                   <div className="p-3 rounded-xl bg-surface-container border border-surface-container-highest/40">
                     <span className="text-on-surface-variant block text-[10px] uppercase">Service Area</span>
-                    <span className="text-on-surface font-semibold">{provider.location} & Region</span>
+                    <span className="text-on-surface font-semibold">{provider.location || 'Flexible Area'}</span>
                   </div>
                   <div className="p-3 rounded-xl bg-surface-container border border-surface-container-highest/40">
                     <span className="text-on-surface-variant block text-[10px] uppercase">Experience</span>
-                    <span className="text-on-surface font-semibold">{provider.yearsExperience}+ Years Verified</span>
+                    <span className="text-on-surface font-semibold">
+                      {provider.yearsExperience === 0 ? '0 Years Experience' : `${provider.yearsExperience} ${provider.yearsExperience === 1 ? 'Year' : 'Years'} Verified`}
+                    </span>
                   </div>
                 </div>
               </div>
@@ -592,15 +852,16 @@ export const ProviderDetailsPage: React.FC = () => {
 
               {/* Category-Specific Craft Specializations */}
               {(() => {
-                const catLower = provider.category.toLowerCase();
+                const normCat = normalizeProviderCategory(provider.category);
+                const catLower = (provider.category || '').toLowerCase();
                 const categoryData = account?.categoryData || {};
-                const isPhoto = catLower.includes('photo');
-                const isVenue = catLower.includes('venue') || catLower.includes('auditorium');
-                const isCaterer = catLower.includes('cater');
-                const isMakeup = catLower.includes('makeup');
-                const isDecor = catLower.includes('decor');
-                const isDJ = catLower.includes('dj') || catLower.includes('entertain');
-                const isEventManager = catLower.includes('event') || catLower.includes('manager');
+                const isPhoto = normCat === 'Photographer' || catLower.includes('photo');
+                const isVenue = normCat === 'Venue / Auditorium' || catLower.includes('venue') || catLower.includes('auditorium');
+                const isCaterer = normCat === 'Caterer' || catLower.includes('cater');
+                const isMakeup = normCat === 'Makeup Artist' || catLower.includes('makeup');
+                const isDecor = normCat === 'Decorator' || catLower.includes('decor');
+                const isDJ = normCat === 'DJ / Entertainment' || catLower.includes('dj') || catLower.includes('entertain') || catLower.includes('music');
+                const isEventManager = normCat === 'Event Manager' || (catLower.includes('event') && catLower.includes('manage'));
 
                 const hasContent =
                   (isPhoto && ((categoryData.photographyStyles && categoryData.photographyStyles.length > 0) || categoryData.equipment?.trim())) ||
@@ -886,49 +1147,101 @@ export const ProviderDetailsPage: React.FC = () => {
 
               {/* Pricing Packages */}
               <div className="rounded-3xl bg-surface-container-high/60 backdrop-blur-xl border border-surface-container-highest/60 p-6 sm:p-8 space-y-6">
-                <div>
-                  <h2 className="font-headline-sm text-xl font-bold text-on-surface flex items-center gap-2.5">
-                    <Icon name="sell" className="text-primary text-[22px]" />
-                    <span>Curated Service Packages</span>
-                  </h2>
-                  <p className="text-xs text-on-surface-variant mt-1">
-                    Transparent package breakdowns with itemized inclusions
-                  </p>
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                  <div>
+                    <h2 className="font-headline-sm text-xl font-bold text-on-surface flex items-center gap-2.5">
+                      <Icon name="sell" className="text-primary text-[22px]" />
+                      <span>Curated Service Packages</span>
+                    </h2>
+                    <p className="text-xs text-on-surface-variant mt-1">
+                      Transparent package breakdowns with itemized inclusions
+                    </p>
+                  </div>
+                  {provider.packages && provider.packages.length > 1 && (
+                    <span className="text-[11px] text-primary bg-primary/10 px-3 py-1 rounded-full font-medium border border-primary/25 self-start sm:self-auto">
+                      Select 1 package to proceed
+                    </span>
+                  )}
                 </div>
 
-                <div className="space-y-4">
-                  {provider.packages.map((pkg) => (
-                    <div
-                      key={pkg.name}
-                      className="p-5 rounded-2xl bg-surface-container-low/90 border border-primary/20 space-y-3"
-                    >
-                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-surface-container-highest/50 pb-3">
-                        <div>
-                          <h3 className="font-title-lg text-base font-bold text-on-surface">
-                            {pkg.name}
-                          </h3>
-                          <p className="text-xs text-on-surface-variant mt-0.5">
-                            {pkg.description}
-                          </p>
-                        </div>
-                        <div className="text-left sm:text-right">
-                          <span className="font-headline-sm text-xl font-bold text-primary">
-                            {formatIndianRupees(pkg.price)}
-                          </span>
-                        </div>
-                      </div>
-
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs text-on-surface pt-1">
-                        {pkg.features.map((feat) => (
-                          <div key={feat} className="flex items-center gap-2">
-                            <Icon name="check_circle" className="text-primary text-[14px] flex-shrink-0" />
-                            <span>{feat}</span>
+                {provider.packages && provider.packages.length > 0 ? (
+                  <div className="space-y-4">
+                    {provider.packages.map((pkg) => {
+                      const isPkgSelected = selectedPackage?.name === pkg.name;
+                      return (
+                        <div
+                          key={pkg.name}
+                          onClick={() => setSelectedPackage(pkg)}
+                          className={`p-5 rounded-2xl transition-all cursor-pointer space-y-3 border-2 ${
+                            isPkgSelected
+                              ? 'bg-surface-container-low border-primary ring-2 ring-primary/30 shadow-lg'
+                              : 'bg-surface-container-low/70 border-surface-container-highest/60 hover:border-primary/50'
+                          }`}
+                        >
+                          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-surface-container-highest/50 pb-3">
+                            <div>
+                              <div className="flex items-center gap-2">
+                                <h3 className="font-title-lg text-base font-bold text-on-surface">
+                                  {pkg.name}
+                                </h3>
+                                {isPkgSelected && (
+                                  <span className="px-2 py-0.5 rounded-full bg-primary/20 text-primary font-bold text-[10px] uppercase tracking-wider border border-primary/40">
+                                    Selected
+                                  </span>
+                                )}
+                              </div>
+                              {pkg.description && (
+                                <p className="text-xs text-on-surface-variant mt-0.5">
+                                  {pkg.description}
+                                </p>
+                              )}
+                            </div>
+                            <div className="flex items-center sm:flex-col sm:items-end justify-between sm:justify-center gap-2">
+                              <span className="font-headline-sm text-xl font-bold text-primary">
+                                {formatIndianRupees(pkg.price)}
+                              </span>
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setSelectedPackage(pkg);
+                                }}
+                                className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 ${
+                                  isPkgSelected
+                                    ? 'bg-primary text-on-primary shadow-sm'
+                                    : 'bg-surface-container hover:bg-surface-bright text-on-surface border border-surface-container-highest/70'
+                                }`}
+                              >
+                                <Icon name={isPkgSelected ? 'check_circle' : 'radio_button_unchecked'} className="text-[14px]" />
+                                <span>{isPkgSelected ? 'Selected ✓' : 'Select Package'}</span>
+                              </button>
+                            </div>
                           </div>
-                        ))}
-                      </div>
-                    </div>
-                  ))}
-                </div>
+
+                          {pkg.features && pkg.features.length > 0 && (
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs text-on-surface pt-1">
+                              {pkg.features.map((feat) => (
+                                <div key={feat} className="flex items-center gap-2">
+                                  <Icon name="check_circle" className="text-primary text-[14px] flex-shrink-0" />
+                                  <span>{feat}</span>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <div className="p-6 rounded-2xl bg-surface-container-low/50 border border-surface-container-highest/40 text-center space-y-2">
+                    <p className="text-sm font-semibold text-on-surface">Custom Quotation &amp; Packages</p>
+                    <p className="text-xs text-on-surface-variant">
+                      {provider.startingPrice > 0
+                        ? `Base services starting from ${formatIndianRupees(provider.startingPrice)}. Custom package tier details available upon consultation.`
+                        : 'Tailored event packages and quotes available directly upon consultation.'}
+                    </p>
+                  </div>
+                )}
               </div>
 
               {/* Customer Reviews Section */}
@@ -1047,10 +1360,6 @@ export const ProviderDetailsPage: React.FC = () => {
                     <div className="text-on-surface font-medium">{provider.contactDemo.hours}</div>
                   </div>
                 </div>
-
-                <p className="text-[11px] text-on-surface-variant/70 leading-relaxed italic border-t border-surface-container-highest/50 pt-2">
-                  Notice: All provider names, contacts, and addresses presented are mock demonstrations for the Eva-Ai prototype.
-                </p>
               </div>
 
               {/* Eva-Ai Marketplace Guarantee */}

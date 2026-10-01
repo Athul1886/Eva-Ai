@@ -19,16 +19,17 @@ export const EventPlanSummary: React.FC<EventPlanSummaryProps> = ({
 }) => {
   const [isOpen, setIsOpen] = useState(false);
 
-  // Compute estimated total
+  // Compute estimated total using package tier price or base price
   const estimatedTotal = selectedServices.reduce(
-    (sum, item) => sum + (Number(item.startingPrice) || 0),
+    (sum, item) => sum + (Number(item.packageDetails?.price || item.price || item.startingPrice) || 0),
     0
   );
 
-  // Determine budget comparison
-  const parsedBudget = typeof eventBudget === 'number' && eventBudget > 0 ? eventBudget : 300000;
-  const remainingBudget = parsedBudget - estimatedTotal;
-  const isOverBudget = remainingBudget < 0;
+  // Determine budget metrics
+  const hasBudget = typeof eventBudget === 'number' && eventBudget > 0;
+  const parsedBudget = hasBudget ? eventBudget : 0;
+  const remainingBudget = hasBudget ? parsedBudget - estimatedTotal : 0;
+  const isOverBudget = hasBudget && remainingBudget < 0;
 
   const count = selectedServices.length;
 
@@ -109,7 +110,7 @@ export const EventPlanSummary: React.FC<EventPlanSummaryProps> = ({
               <div className="flex items-center justify-between text-xs sm:text-sm">
                 <span className="text-on-surface-variant">Allocated Event Budget:</span>
                 <span className="font-semibold text-on-surface">
-                  {formatIndianRupees(parsedBudget)}
+                  {hasBudget ? formatIndianRupees(parsedBudget) : 'Budget not set'}
                 </span>
               </div>
 
@@ -120,29 +121,33 @@ export const EventPlanSummary: React.FC<EventPlanSummaryProps> = ({
                 </span>
               </div>
 
-              <div className="pt-2 border-t border-surface-container-highest/40 flex items-center justify-between text-xs sm:text-sm">
-                <span className="text-on-surface-variant">Remaining Budget:</span>
-                <span
-                  className={`font-bold ${
-                    isOverBudget ? 'text-error' : 'text-primary'
-                  }`}
-                >
-                  {formatIndianRupees(remainingBudget)}
-                  {isOverBudget && ' (Exceeds Target)'}
-                </span>
-              </div>
+              {hasBudget && (
+                <>
+                  <div className="pt-2 border-t border-surface-container-highest/40 flex items-center justify-between text-xs sm:text-sm">
+                    <span className="text-on-surface-variant">Remaining Budget:</span>
+                    <span
+                      className={`font-bold ${
+                        isOverBudget ? 'text-error' : 'text-primary'
+                      }`}
+                    >
+                      {formatIndianRupees(remainingBudget)}
+                      {isOverBudget && ' (Exceeds Target)'}
+                    </span>
+                  </div>
 
-              {/* Progress bar */}
-              <div className="w-full h-2 rounded-full bg-surface-container-highest overflow-hidden mt-2">
-                <div
-                  className={`h-full transition-all duration-500 rounded-full ${
-                    isOverBudget ? 'bg-error' : 'bg-primary'
-                  }`}
-                  style={{
-                    width: `${Math.min(100, (estimatedTotal / parsedBudget) * 100)}%`,
-                  }}
-                />
-              </div>
+                  {/* Progress bar */}
+                  <div className="w-full h-2 rounded-full bg-surface-container-highest overflow-hidden mt-2">
+                    <div
+                      className={`h-full transition-all duration-500 rounded-full ${
+                        isOverBudget ? 'bg-error' : 'bg-primary'
+                      }`}
+                      style={{
+                        width: `${Math.min(100, (estimatedTotal / parsedBudget) * 100)}%`,
+                      }}
+                    />
+                  </div>
+                </>
+              )}
             </div>
 
             {/* Selected Services List */}
@@ -186,9 +191,15 @@ export const EventPlanSummary: React.FC<EventPlanSummaryProps> = ({
                         <h4 className="font-title-md text-sm font-semibold text-on-surface mt-0.5">
                           {srv.providerName}
                         </h4>
-                        <span className="text-xs font-bold text-primary">
-                          Starting {formatIndianRupees(srv.startingPrice)}
-                        </span>
+                        {srv.packageName || srv.packageDetails?.name ? (
+                          <div className="flex items-center gap-1 text-xs text-primary font-bold">
+                            <span>{srv.packageName || srv.packageDetails?.name} &bull; {formatIndianRupees(srv.packageDetails?.price || srv.price || srv.startingPrice)}</span>
+                          </div>
+                        ) : (
+                          <span className="text-xs font-bold text-primary">
+                            Starting {formatIndianRupees(srv.startingPrice)}
+                          </span>
+                        )}
                       </div>
                     </div>
 

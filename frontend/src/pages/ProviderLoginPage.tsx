@@ -147,7 +147,7 @@ export const ProviderLoginPage: React.FC = () => {
                     onClick={() => setForgotPasswordNotice(true)}
                     className="text-[11px] text-secondary hover:underline font-medium"
                   >
-                    Forgot Password?
+                    {/* Forgot Password? */}
                   </button>
                 </div>
                 <div className="relative">
@@ -204,7 +204,7 @@ export const ProviderLoginPage: React.FC = () => {
             </form>
 
             {/* Quick Demo Credentials Autofill Helper */}
-            <div className="mt-5 p-3 rounded-xl bg-surface-container/70 border border-surface-container-highest/50 text-center">
+            {/* <div className="mt-5 p-3 rounded-xl bg-surface-container/70 border border-surface-container-highest/50 text-center">
               <span className="text-[11px] text-on-surface-variant block mb-1.5">
                 Quick Demo Atelier Account:
               </span>
@@ -216,7 +216,7 @@ export const ProviderLoginPage: React.FC = () => {
                 <Icon name="auto_awesome" className="text-[14px]" />
                 <span>Fill LensCraft Studio Demo</span>
               </button>
-            </div>
+            </div> */}
 
             {/* Create account link */}
             <div className="text-center mt-6 pt-4 border-t border-surface-container space-y-2">

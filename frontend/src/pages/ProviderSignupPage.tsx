@@ -8,6 +8,7 @@ import {
   saveProviderAccount,
   setProviderSession,
   seedDemoBookingIfEmpty,
+  normalizeProviderCategory,
 } from '../utils/providerAuth';
 import {
   authApi,
@@ -220,10 +221,18 @@ export const ProviderSignupPage: React.FC = () => {
     });
 
     const cleanEmail = (accountData.email.trim() || basicInfo.email.trim()).toLowerCase();
-    const startingPriceNum = Number(basicInfo.startingPrice.toString().replace(/[^0-9]/g, '')) || 25000;
-    const yearsExpNum = Number(basicInfo.yearsExperience) || 3;
+    const startingPriceNum =
+      basicInfo.startingPrice !== '' && !isNaN(Number(basicInfo.startingPrice.toString().replace(/[^0-9]/g, '')))
+        ? Number(basicInfo.startingPrice.toString().replace(/[^0-9]/g, ''))
+        : 0;
+    const yearsExpNum =
+      basicInfo.yearsExperience !== '' && !isNaN(Number(basicInfo.yearsExperience))
+        ? Number(basicInfo.yearsExperience)
+        : 0;
 
     try {
+      const chosenCategory = (normalizeProviderCategory(selectedCategory) as ProviderCategoryType) || (selectedCategory as ProviderCategoryType) || '';
+
       // 1. Submit registration payload to backend API (do NOT send confirmPassword or auth tokens)
       const res = await authApi.register({
         fullName: basicInfo.fullName.trim(),
@@ -233,9 +242,14 @@ export const ProviderSignupPage: React.FC = () => {
         phone: basicInfo.phone.trim(),
         location: basicInfo.location.trim(),
         role: 'provider',
-        category: selectedCategory as ProviderCategoryType,
+        category: chosenCategory,
+        serviceCategory: chosenCategory,
         description: basicInfo.description.trim(),
         yearsExperience: yearsExpNum,
+        years_experience: yearsExpNum,
+        experience: yearsExpNum,
+        experience_years: yearsExpNum,
+        years: yearsExpNum,
         startingPrice: startingPriceNum,
       });
 
@@ -287,8 +301,14 @@ export const ProviderSignupPage: React.FC = () => {
         phone: backendUser?.phone || basicInfo.phone.trim(),
         location: backendUser?.location || basicInfo.location.trim(),
         description: backendUser?.description || basicInfo.description.trim(),
-        yearsExperience: yearsExpNum,
-        startingPrice: startingPriceNum,
+        yearsExperience:
+          backendUser?.yearsExperience !== undefined && backendUser?.yearsExperience !== null
+            ? Number(backendUser.yearsExperience)
+            : yearsExpNum,
+        startingPrice:
+          backendUser?.startingPrice !== undefined && backendUser?.startingPrice !== null
+            ? Number(backendUser.startingPrice)
+            : startingPriceNum,
         category: selectedCategory as ProviderCategoryType,
         profileImage: basicInfo.profileImage,
         categoryData: catData,
