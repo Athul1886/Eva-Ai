@@ -87,7 +87,6 @@ export const register = async (req, res) => {
 export const login = async (req, res) => {
   try {
     const { email, password } = req.body;
-    console.log('[Login Debug] Body received:', { email, passwordLength: password ? password.length : 0 });
 
     const missingFields = [];
     if (!email) missingFields.push('email');

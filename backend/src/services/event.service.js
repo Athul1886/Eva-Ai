@@ -2,13 +2,19 @@ import { getSupabaseClient, getSupabaseAdmin } from '../config/supabase.js';
 import { isProviderAvailableOnDate } from './availability.service.js';
 import { formatEventPlanDTO } from '../utils/eventPlan.dto.js';
 import { createBooking } from './booking.service.js';
-import { toFrontendStatus, FRONTEND_STATUS } from '../utils/booking.dto.js';
+import { toFrontendStatus } from '../utils/booking.dto.js';
 
 /**
  * Transforms a raw database event row and its associated cart_items
  * into the frontend-compatible DTO format.
  */
-export const formatEventDTO = (event, cartItems = []) => {
+export const formatEventDTO = (
+  event,
+  cartItems = [],
+  requirementCategoryNames = [],
+  reqPreferences = null,
+  reqAdditionalNotes = ''
+) => {
   if (!event) return null;
 
   const formattedServices = (cartItems || []).map((item) => ({
@@ -34,6 +40,35 @@ export const formatEventDTO = (event, cartItems = []) => {
     createdAt: item.created_at,
   }));
 
+  // Resolve required services from preferences or joined event_requirements
+  let requiredServices = [];
+  if (Array.isArray(requirementCategoryNames) && requirementCategoryNames.length > 0) {
+    requiredServices = requirementCategoryNames;
+  } else if (Array.isArray(event.preferences?.requiredServices) && event.preferences.requiredServices.length > 0) {
+    requiredServices = event.preferences.requiredServices;
+  } else if (Array.isArray(event.preferences?.services) && event.preferences.services.length > 0) {
+    requiredServices = event.preferences.services;
+  } else if (Array.isArray(event.required_services)) {
+    requiredServices = event.required_services;
+  }
+
+  // Resolve preferences cleanly (array or object)
+  let preferences = [];
+  if (reqPreferences !== null && reqPreferences !== undefined) {
+    preferences = reqPreferences;
+  } else if (Array.isArray(event.preferences)) {
+    preferences = event.preferences;
+  } else if (Array.isArray(event.preferences?.preferences)) {
+    preferences = event.preferences.preferences;
+  } else if (Array.isArray(event.preferences?.stylePreferences)) {
+    preferences = event.preferences.stylePreferences;
+  } else if (typeof event.preferences === 'object' && event.preferences !== null) {
+    preferences = event.preferences;
+  }
+
+  // Resolve additional notes
+  const additionalNotes = reqAdditionalNotes || event.additional_notes || event.additionalNotes || '';
+
   return {
     id: event.id,
     customerId: event.user_id,
@@ -50,10 +85,10 @@ export const formatEventDTO = (event, cartItems = []) => {
     guestCount: event.estimated_guests,
     budget: parseFloat(event.total_budget) || 0,
     status: event.status,
-    preferences: event.preferences || {},
-    additionalNotes: event.additional_notes || '',
+    preferences,
+    additionalNotes,
     services: formattedServices,
-    requiredServices: event.preferences?.requiredServices || event.preferences?.services || [],
+    requiredServices,
     servicesCount: formattedServices.length,
     createdAt: event.created_at,
     updatedAt: event.updated_at,
@@ -134,27 +169,25 @@ export const createEvent = async (userId, eventData) => {
     status: eventData.status || 'draft',
   };
 
-  // Check if preferences or additional_notes can be attached
-  if (eventData.preferences !== undefined) {
-    insertPayload.preferences = eventData.preferences;
-  }
-  if (eventData.additionalNotes !== undefined) {
-    insertPayload.additional_notes = eventData.additionalNotes;
+  // Handle preferences and required services safely without mutual overwrite
+  let prefsPayload = {};
+  if (Array.isArray(eventData.preferences)) {
+    prefsPayload.preferences = eventData.preferences;
+    prefsPayload.stylePreferences = eventData.preferences;
+  } else if (typeof eventData.preferences === 'object' && eventData.preferences !== null) {
+    prefsPayload = { ...eventData.preferences };
   }
 
-  // Save required services into preferences if supplied as an array
-  if (Array.isArray(eventData.services) && eventData.services.length > 0 && typeof eventData.services[0] === 'string') {
-    if (!insertPayload.preferences || typeof insertPayload.preferences !== 'object') {
-      insertPayload.preferences = {};
-    }
-    insertPayload.preferences.requiredServices = eventData.services;
+  const reqServicesList = Array.isArray(eventData.requiredServices)
+    ? eventData.requiredServices
+    : (Array.isArray(eventData.services) && typeof eventData.services[0] === 'string' ? eventData.services : null);
+
+  if (reqServicesList && reqServicesList.length > 0) {
+    prefsPayload.requiredServices = reqServicesList;
+    prefsPayload.services = reqServicesList;
   }
-  if (Array.isArray(eventData.requiredServices) && eventData.requiredServices.length > 0) {
-    if (!insertPayload.preferences || typeof insertPayload.preferences !== 'object') {
-      insertPayload.preferences = {};
-    }
-    insertPayload.preferences.requiredServices = eventData.requiredServices;
-  }
+
+  insertPayload.preferences = prefsPayload;
 
   let eventRecord = null;
   const { data: createdEvent, error: insertError } = await dbClient
@@ -189,38 +222,87 @@ export const createEvent = async (userId, eventData) => {
     eventRecord = createdEvent;
   }
 
-  // Save category requirements into public.event_requirements if matching categories found
+  // Save category requirements and event preferences into public.event_requirements
   const reqServices = eventData.requiredServices || (Array.isArray(eventData.services) && typeof eventData.services[0] === 'string' ? eventData.services : null);
-  if (Array.isArray(reqServices) && reqServices.length > 0) {
-    try {
-      const { data: allCategories } = await dbClient.from('categories').select('id, name, slug');
-      if (allCategories && allCategories.length > 0) {
-        const catMap = new Map();
-        allCategories.forEach(c => {
-          catMap.set(c.id, c.id);
-          catMap.set(c.slug.toLowerCase(), c.id);
-          catMap.set(c.name.toLowerCase(), c.id);
-        });
-        const reqInserts = [];
-        for (const reqItem of reqServices) {
-          const catId = typeof reqItem === 'string' ? catMap.get(reqItem.toLowerCase()) : (catMap.get(reqItem.categoryId) || catMap.get(reqItem.category?.toLowerCase()));
-          if (catId) {
-            reqInserts.push({
-              event_id: eventRecord.id,
-              category_id: catId,
-              allocated_budget: typeof reqItem === 'object' && reqItem.budget ? reqItem.budget : 0,
-              preferences: typeof reqItem === 'object' && reqItem.preferences ? reqItem.preferences : {},
-              status: 'needed'
-            });
-          }
+  try {
+    const { data: allCategories } = await dbClient.from('categories').select('id, name, slug');
+    if (allCategories && allCategories.length > 0) {
+      const catMap = new Map();
+      allCategories.forEach(c => {
+        catMap.set(c.id, c.id);
+        catMap.set(c.slug.toLowerCase(), c.id);
+        catMap.set(c.name.toLowerCase(), c.id);
+      });
+
+      // Add common category synonyms
+      allCategories.forEach(c => {
+        const slug = c.slug.toLowerCase();
+        const name = c.name.toLowerCase();
+        if (slug.includes('decor') || name.includes('decor')) {
+          catMap.set('decoration', c.id);
+          catMap.set('decor', c.id);
+          catMap.set('decorators', c.id);
         }
-        if (reqInserts.length > 0) {
-          await dbClient.from('event_requirements').upsert(reqInserts, { onConflict: 'event_id,category_id' });
+        if (slug.includes('makeup') || name.includes('makeup')) {
+          catMap.set('makeup', c.id);
+          catMap.set('make-up', c.id);
+          catMap.set('make up', c.id);
+          catMap.set('makeup artist', c.id);
+          catMap.set('makeup artists', c.id);
+        }
+        if (slug.includes('photo') || name.includes('photo')) {
+          catMap.set('photography', c.id);
+          catMap.set('photographer', c.id);
+          catMap.set('photographers', c.id);
+        }
+        if (slug.includes('venue') || name.includes('venue') || slug.includes('auditorium')) {
+          catMap.set('venue', c.id);
+          catMap.set('venues', c.id);
+          catMap.set('venue / auditorium', c.id);
+        }
+        if (slug.includes('cater') || name.includes('cater')) {
+          catMap.set('catering', c.id);
+          catMap.set('caterer', c.id);
+          catMap.set('caterers', c.id);
+        }
+        if (slug.includes('dj') || name.includes('dj')) {
+          catMap.set('dj', c.id);
+          catMap.set('dj & entertainment', c.id);
+          catMap.set('dj / entertainment', c.id);
+        }
+      });
+
+      const servicesToProcess = (Array.isArray(reqServices) && reqServices.length > 0)
+        ? reqServices
+        : (allCategories.length > 0 ? [allCategories[0].name] : []);
+
+      const reqInserts = [];
+      for (const reqItem of servicesToProcess) {
+        const catId = typeof reqItem === 'string'
+          ? catMap.get(reqItem.toLowerCase())
+          : (catMap.get(reqItem.categoryId) || catMap.get(reqItem.category?.toLowerCase()));
+
+        if (catId) {
+          reqInserts.push({
+            event_id: eventRecord.id,
+            category_id: catId,
+            allocated_budget: typeof reqItem === 'object' && reqItem.budget ? reqItem.budget : 0,
+            preferences: {
+              preferences: eventData.preferences || [],
+              additionalNotes: eventData.additionalNotes || '',
+              ...(typeof reqItem === 'object' && reqItem.preferences ? reqItem.preferences : {})
+            },
+            status: 'needed'
+          });
         }
       }
-    } catch (reqErr) {
-      // Non-fatal
+
+      if (reqInserts.length > 0) {
+        await dbClient.from('event_requirements').upsert(reqInserts, { onConflict: 'event_id,category_id' });
+      }
     }
+  } catch (reqErr) {
+    // Non-fatal
   }
 
   // Handle any pre-selected service items
@@ -313,7 +395,36 @@ export const getEventById = async (eventId, requestingUser) => {
   }
 
   const cartItems = await getCartItemsForEvent(dbClient, event.id);
-  return formatEventDTO(event, cartItems);
+
+  // Fetch requirement categories, preferences, and additional notes from public.event_requirements
+  let reqCategoryNames = [];
+  let reqPreferences = null;
+  let reqAdditionalNotes = '';
+
+  try {
+    const { data: reqItems } = await dbClient
+      .from('event_requirements')
+      .select('id, category_id, preferences, category:categories(name)')
+      .eq('event_id', event.id);
+
+    if (reqItems && reqItems.length > 0) {
+      reqCategoryNames = reqItems.map((r) => r.category?.name).filter(Boolean);
+      for (const item of reqItems) {
+        if (item.preferences && typeof item.preferences === 'object') {
+          if (item.preferences.preferences && (!reqPreferences || reqPreferences.length === 0)) {
+            reqPreferences = item.preferences.preferences;
+          }
+          if (item.preferences.additionalNotes && !reqAdditionalNotes) {
+            reqAdditionalNotes = item.preferences.additionalNotes;
+          }
+        }
+      }
+    }
+  } catch (reqErr) {
+    // Non-fatal
+  }
+
+  return formatEventDTO(event, cartItems, reqCategoryNames, reqPreferences, reqAdditionalNotes);
 };
 
 /**

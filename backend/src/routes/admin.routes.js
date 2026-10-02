@@ -8,7 +8,40 @@ import {
 const router = Router();
 
 // ==============================================================================
-// ADMIN PROVIDER MANAGEMENT ROUTES (ADMIN ONLY)
+// 1. CUSTOMER LIST (ADMIN ONLY)
+// ==============================================================================
+
+/**
+ * @route   GET /api/admin/users
+ * @desc    List all customers (excluding providers and admins)
+ * @access  Protected (Admin only)
+ */
+router.get('/users', authenticate, requireAdmin, adminController.getCustomers);
+
+// ==============================================================================
+// 2. ADMIN DASHBOARD STATS (ADMIN ONLY)
+// ==============================================================================
+
+/**
+ * @route   GET /api/admin/dashboard/stats
+ * @desc    Get aggregated counts for customers, providers, and approval statuses
+ * @access  Protected (Admin only)
+ */
+router.get('/dashboard/stats', authenticate, requireAdmin, adminController.getDashboardStats);
+
+// ==============================================================================
+// 3. PROVIDER APPROVE / REJECT / STATUS (ADMIN ONLY)
+// ==============================================================================
+
+/**
+ * @route   PATCH /api/admin/providers/:id/status
+ * @desc    Update provider approval status (PENDING, APPROVED, REJECTED, SUSPENDED)
+ * @access  Protected (Admin only)
+ */
+router.patch('/providers/:id/status', authenticate, requireAdmin, adminController.updateProviderStatus);
+
+// ==============================================================================
+// EXISTING ADMIN PROVIDER MANAGEMENT ROUTES (PRESERVED)
 // ==============================================================================
 
 /**
@@ -17,6 +50,26 @@ const router = Router();
  * @access  Protected (Admin only)
  */
 router.get('/providers', authenticate, requireAdmin, adminController.listProviders);
+
+/**
+ * @route   GET /api/admin/providers/pending
+ * @desc    List all pending provider requests
+ * @access  Protected (Admin only)
+ */
+router.get('/providers/pending', authenticate, requireAdmin, (req, res, next) => {
+  req.query.status = 'pending';
+  return adminController.listProviders(req, res, next);
+});
+
+/**
+ * @route   GET /api/admin/pending-providers
+ * @desc    Alias to list all pending provider requests
+ * @access  Protected (Admin only)
+ */
+router.get('/pending-providers', authenticate, requireAdmin, (req, res, next) => {
+  req.query.status = 'pending';
+  return adminController.listProviders(req, res, next);
+});
 
 /**
  * @route   GET /api/admin/providers/:id
