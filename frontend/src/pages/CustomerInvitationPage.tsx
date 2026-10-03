@@ -364,7 +364,7 @@ export const CustomerInvitationPage: React.FC = () => {
   // If no active event exists
   if (!eventPlan) {
     return (
-      <div className="min-h-[80vh] flex items-center justify-center p-4">
+      <div className="min-h-[80vh] pt-28 pb-16 flex items-center justify-center p-4">
         <div className="max-w-md w-full rounded-3xl bg-surface-container-high/60 backdrop-blur-xl p-8 sm:p-10 text-center border border-surface-container-highest space-y-5 shadow-2xl">
           <div className="w-14 h-14 rounded-2xl bg-surface-container-highest text-primary mx-auto flex items-center justify-center shadow-inner">
             <Icon name="mail_lock" className="text-[32px]" />
@@ -416,7 +416,7 @@ export const CustomerInvitationPage: React.FC = () => {
     invitation?.status === 'expired';
 
   return (
-    <div className="bg-surface font-body-md text-on-surface min-h-screen py-8 relative overflow-hidden">
+    <div className="bg-surface font-body-md text-on-surface min-h-screen pt-28 pb-20 relative overflow-hidden">
       {/* Background Ambience */}
       <div className="absolute top-10 left-1/2 -translate-x-1/2 w-[800px] h-[350px] bg-primary/10 rounded-full blur-[140px] pointer-events-none" />
 

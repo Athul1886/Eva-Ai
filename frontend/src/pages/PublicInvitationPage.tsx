@@ -2,7 +2,6 @@ import React, { useEffect, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import Icon from '../components/common/Icon';
 import InvitationCard from '../components/invitation/InvitationCard';
-import RSVPForm from '../components/invitation/RSVPForm';
 import { InvitationData, normalizeInvitationTheme } from '../types/invitation';
 import { invitationsApi, ApiError } from '../api/api';
 
@@ -75,10 +74,6 @@ export const PublicInvitationPage: React.FC = () => {
       isMounted = false;
     };
   }, [publicToken]);
-
-  const isExpired =
-    invitation?.status === 'EXPIRED' ||
-    invitation?.status === 'expired';
 
   if (isLoading) {
     return (
@@ -174,14 +169,6 @@ export const PublicInvitationPage: React.FC = () => {
           invitation={invitation}
           isPreview={false}
         />
-
-        {/* RSVP Form for Active Invitations (Hidden when Expired) */}
-        {!isExpired && publicToken && (
-          <RSVPForm
-            publicToken={publicToken}
-            isExpired={isExpired}
-          />
-        )}
       </main>
 
       {/* Public Footer */}
